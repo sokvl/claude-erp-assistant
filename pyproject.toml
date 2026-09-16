@@ -1,0 +1,14 @@
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q --strict-markers -m 'not integration'"
+markers = ["integration: requires a live MongoDB on localhost:27017"]
+
+[tool.coverage.run]
+source = ["src/app"]
+branch = true
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85
