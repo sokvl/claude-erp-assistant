@@ -10,3 +10,8 @@ _db: Database = _client[MONGO_DB_NAME]
 
 def get_collection(name: str) -> Collection:
     return _db[name]
+
+
+# Injected rather than called inline so tests can override it without a live Mongo.
+def products_collection() -> Collection:
+    return get_collection("products")
