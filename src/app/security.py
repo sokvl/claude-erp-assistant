@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 
@@ -7,5 +9,9 @@ api_key_header = APIKeyHeader(name="X-API-Key")
 
 
 def require_api_key(key: str = Security(api_key_header)):
-    if key != API_KEY:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    if not secrets.compare_digest(key.encode(), API_KEY.encode()):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+            headers={"WWW-Authenticate": "APIKey"},
+        )
