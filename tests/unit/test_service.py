@@ -2,17 +2,18 @@ import pytest
 
 from app.catalog.enums import SortField, SortOrder
 from app.catalog.service import search_products
+from app.limits import QUERY_TIMEOUT_MS
 
 
 class FakeCollection:
-    """Records pipelines instead of running them - no Mongo, no mocking library."""
-
     def __init__(self, result):
         self.result = result
         self.pipelines = []
+        self.options = []
 
     def aggregate(self, pipeline, **kwargs):
         self.pipelines.append(pipeline)
+        self.options.append(kwargs)
         return iter(self.result)
 
 
@@ -59,6 +60,17 @@ def test_search_products_echoes_pagination_in_response():
 
     # Assert
     assert (result["page"], result["pageSize"]) == (3, 50)
+
+
+def test_search_products_caps_server_side_execution_time():
+    # Arrange
+    collection = FakeCollection([{"items": [], "total": 0}])
+
+    # Act
+    _search(collection)
+
+    # Assert
+    assert collection.options == [{"maxTimeMS": QUERY_TIMEOUT_MS}]
 
 
 def test_search_products_passes_criteria_as_first_pipeline_stage():
