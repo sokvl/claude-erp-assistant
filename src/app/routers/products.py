@@ -19,7 +19,7 @@ def _check_vocabulary(collection: Collection, param: str, values: list[str]) -> 
         if value not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Unknown {param}: {value!r}. Allowed: {sorted(allowed)}",
+                detail=f"Unknown {param}: {value!r}. See /products/facets for allowed values.",
             )
 
 
