@@ -3,6 +3,8 @@ import pytest
 from app.catalog.enums import SortField, SortOrder
 from app.catalog.query import build_product_filter, build_search_pipeline
 from app.catalog.service import search_products
+from app.config import API_KEY
+from app.limits import MAX_PAGE, MAX_PAGE_SIZE, MAX_PRICE, MAX_VRAM_GB
 
 pytestmark = pytest.mark.integration
 
@@ -154,3 +156,33 @@ def test_search_products_match_stage_uses_an_index(products):
 
     # Assert: $match stays first, so it is planned as an ordinary query
     assert "IXSCAN" in str(plan)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [f"?min_vram_gb={2**63}", f"?min_vram_gb={10**30}", f"?page={10**18}"],
+    ids=["vram_over_int64", "vram_absurd", "page_skip_overflow"],
+)
+def test_list_products_previously_crashing_numbers_return_422_not_500(client, query):
+    # Arrange / Act
+    response = client.get(f"/products{query}", headers={"X-API-Key": API_KEY})
+
+    # Assert
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        f"?min_vram_gb={MAX_VRAM_GB}",
+        f"?page={MAX_PAGE}&page_size={MAX_PAGE_SIZE}",
+        f"?max_price={MAX_PRICE:.0f}&sort_by=vram",
+    ],
+    ids=["vram_at_cap", "max_skip", "price_at_cap_with_spec_sort"],
+)
+def test_list_products_values_at_cap_encode_and_execute_against_mongo(client, query):
+    # Arrange / Act
+    response = client.get(f"/products{query}", headers={"X-API-Key": API_KEY})
+
+    # Assert
+    assert response.status_code == 200

@@ -69,3 +69,18 @@ def products(mongo_client):
 
     # Annihilate
     mongo_client.drop_database(db_name)
+
+
+@pytest.fixture
+def client(products):
+    from fastapi.testclient import TestClient
+
+    from app.catalog import vocab
+    from app.db import products_collection
+    from app.main import app
+
+    app.dependency_overrides[products_collection] = lambda: products
+    vocab.clear_cache()
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+    vocab.clear_cache()
