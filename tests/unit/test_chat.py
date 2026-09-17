@@ -457,3 +457,119 @@ def test_run_turn_refusal_is_logged_with_its_category(caplog):
 
     # Assert
     assert "category=cyber" in caplog.text
+
+
+def _run_traced(client, steps):
+    try:
+        list(run_turn(client, None, [], [], "question", steps=steps))
+    except ChatError:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("streams", "tool_error", "expected"),
+    [
+        (
+            lambda: [_tool_round(), _answer()],
+            None,
+            [("model.call", "ok"), ("tool search_products", "ok"), ("model.call", "ok")],
+        ),
+        (
+            lambda: [FakeStream(fail_after=_mid_stream("overloaded_error")), _answer()],
+            None,
+            [("model.call", "retry"), ("model.call", "ok")],
+        ),
+        (
+            lambda: [_tool_round(), _answer()],
+            ToolInputError("page_size: too big"),
+            [("model.call", "ok"), ("tool search_products", "is_error"), ("model.call", "ok")],
+        ),
+        (
+            lambda: [_tool_round(), _answer()],
+            KeyError("bug"),
+            [("model.call", "ok"), ("tool search_products", "is_error"), ("model.call", "ok")],
+        ),
+        (
+            lambda: [_tool_round()],
+            ServerSelectionTimeoutError("down"),
+            [("model.call", "ok"), ("tool search_products", "FAIL")],
+        ),
+        (
+            lambda: [FakeStream(open_error=_status_error(anthropic.OverloadedError, 529, "overloaded_error"))],
+            None,
+            [("model.call", "FAIL")],
+        ),
+        (
+            lambda: [FakeStream(fail_after=_mid_stream("invalid_request_error"))],
+            None,
+            [("model.call", "FAIL")],
+        ),
+    ],
+    ids=["tool_turn", "retried_stream", "tool_input_error", "tool_bug", "database_down",
+         "open_overloaded", "mid_stream_rejected"],
+)
+def test_run_turn_trace_records_each_step_with_its_status(monkeypatch, streams, tool_error, expected):
+    # Arrange
+    if tool_error is not None:
+        def failing_run_tool(db, name, tool_input):
+            raise tool_error
+
+        monkeypatch.setattr(chat, "run_tool", failing_run_tool)
+    steps = []
+
+    # Act
+    _run_traced(FakeClient(*streams()), steps)
+
+    # Assert
+    assert [(step.name, step.status) for step in steps] == expected
+
+
+@pytest.mark.parametrize(
+    ("streams", "outcome"),
+    [
+        (lambda: [_answer()], "done"),
+        (lambda: [FakeStream(open_error=anthropic.APIConnectionError(request=REQUEST))], "assistant_busy"),
+        (lambda: [FakeStream(final=_message("refusal"))], "refused"),
+    ],
+    ids=["done", "busy", "refused"],
+)
+def test_run_turn_logs_one_trace_record_with_steps_and_outcome(caplog, streams, outcome):
+    # Arrange
+    steps = []
+
+    # Act
+    with caplog.at_level(logging.INFO, logger=chat.__name__):
+        _run_traced(FakeClient(*streams()), steps)
+
+    # Assert
+    records = [record for record in caplog.records if hasattr(record, "run_id")]
+    assert [(record.outcome, record.trace) for record in records] == [(outcome, steps)]
+
+
+def test_run_turn_trace_text_localizes_the_failing_step(caplog):
+    # Arrange
+    client = FakeClient(FakeStream(open_error=_status_error(anthropic.OverloadedError, 529, "overloaded_error")))
+
+    # Act
+    with caplog.at_level(logging.INFO, logger=chat.__name__):
+        _run_traced(client, [])
+
+    # Assert
+    trace = next(record.getMessage() for record in caplog.records if hasattr(record, "run_id"))
+    assert "model.call" in trace and "FAIL" in trace and "outcome: assistant_busy" in trace
+
+
+def test_run_turn_model_call_step_carries_token_usage():
+    # Arrange
+    steps = []
+
+    # Act
+    _run_traced(FakeClient(_answer()), steps)
+
+    # Assert
+    assert steps[0].usage == {
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
