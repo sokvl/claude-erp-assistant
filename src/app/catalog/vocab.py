@@ -2,8 +2,6 @@ import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-# Query param -> document path. Vocabularies come from the data, not a static
-# enum, so adding a product can never make its own values unsearchable.
 VOCAB_FIELDS: Mapping[str, str] = {
     "category": "category",
     "brand": "brand",
@@ -27,8 +25,6 @@ def get_vocabulary(collection: Any, param: str) -> frozenset[str]:
     if cached is not None and cached[1] > now:
         return cached[0]
 
-    # distinct() drops None, so non-GPU products contribute nothing to spec
-    # vocabularies. It also flattens arrays, which is what we want for useCases.
     values = frozenset(collection.distinct(VOCAB_FIELDS[param]))
     _cache[param] = (values, now + TTL_SECONDS)
     return values

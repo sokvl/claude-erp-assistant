@@ -13,22 +13,12 @@ from app.limits import (
     MAX_VRAM_GB,
 )
 
-# Bounded here rather than at the vocabulary check, because that check runs
-# after validation and echoes the value back into the error detail.
 VocabValue = Annotated[str, Field(max_length=MAX_TEXT_LENGTH)]
-
-# allow_inf_nan=False on the float fields below: "1e400" parses to inf, which
-# BSON encodes happily and which then matches nothing, so a range filter on it
-# is silently meaningless.
 
 
 class ProductSearchParams(BaseModel):
-    # extra="forbid" turns a typo like ?min_vram=24 into a 422 rather than a
-    # silently ignored filter.
     model_config = ConfigDict(extra="forbid")
 
-    # Vocabulary params are plain str here and checked against the live DB
-    # vocabulary in the router - the allowed values aren't known at import time.
     category: VocabValue | None = None
     brand: VocabValue | None = None
     architecture: VocabValue | None = None
