@@ -5,15 +5,11 @@ from uuid import uuid4
 
 from app.limits import MAX_CONVERSATION_TURNS, MAX_CONVERSATIONS
 
+MAX_MESSAGES = 2 * MAX_CONVERSATION_TURNS
+
 
 class ConversationStore:
-    def __init__(
-        self,
-        max_conversations: int = MAX_CONVERSATIONS,
-        max_turns: int = MAX_CONVERSATION_TURNS,
-    ) -> None:
-        self._max_conversations = max_conversations
-        self._max_messages = 2 * max_turns
+    def __init__(self) -> None:
         self._conversations: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
         self._lock = Lock()
 
@@ -21,7 +17,7 @@ class ConversationStore:
         conversation_id = uuid4().hex
         with self._lock:
             self._conversations[conversation_id] = []
-            while len(self._conversations) > self._max_conversations:
+            while len(self._conversations) > MAX_CONVERSATIONS:
                 self._conversations.popitem(last=False)
         return conversation_id
 
@@ -40,7 +36,7 @@ class ConversationStore:
                 return False
             messages.append({"role": "user", "content": user_text})
             messages.append({"role": "assistant", "content": answer})
-            overflow = len(messages) - self._max_messages
+            overflow = len(messages) - MAX_MESSAGES
             if overflow > 0:
                 del messages[:overflow]
             self._conversations.move_to_end(conversation_id)
