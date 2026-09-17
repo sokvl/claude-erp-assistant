@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import Iterator
 from typing import Any
@@ -14,6 +15,8 @@ from app.assistant.tools import build_tools
 from app.db import get_database
 from app.limits import MAX_CHAT_MESSAGE_LENGTH
 from app.security import require_api_key
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[Depends(require_api_key)])
 
@@ -72,3 +75,7 @@ def chat(
                 yield ServerSentEvent(event="done", data={"truncated": event.truncated})
     except ChatError as exc:
         yield ServerSentEvent(event="error", data={"code": exc.code, "message": exc.message})
+    except Exception:
+        logger.exception("chat turn failed unexpectedly")
+        error = ChatError("unexpected_error")
+        yield ServerSentEvent(event="error", data={"code": error.code, "message": error.message})
