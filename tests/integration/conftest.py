@@ -76,10 +76,10 @@ def client(products):
     from fastapi.testclient import TestClient
 
     from app.catalog import vocab
-    from app.db import products_collection
+    from app.db import get_database
     from app.main import app
 
-    app.dependency_overrides[products_collection] = lambda: products
+    app.dependency_overrides[get_database] = lambda: {"products": products}
     vocab.clear_cache()
     yield TestClient(app)
     app.dependency_overrides.clear()

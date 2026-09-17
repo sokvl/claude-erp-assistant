@@ -4,7 +4,7 @@ from pymongo.errors import ExecutionTimeout, ServerSelectionTimeoutError
 
 from app.catalog import vocab
 from app.config import API_KEY
-from app.db import products_collection
+from app.db import get_database
 from app.limits import MAX_PAGE, MAX_PAGE_SIZE, MAX_PRICE, MAX_TEXT_LENGTH, MAX_USE_CASES, MAX_VRAM_GB
 from app.main import app
 
@@ -37,7 +37,7 @@ class FakeCollection:
 @pytest.fixture
 def collection():
     fake = FakeCollection()
-    app.dependency_overrides[products_collection] = lambda: fake
+    app.dependency_overrides[get_database] = lambda: {"products": fake}
     vocab.clear_cache()
     yield fake
     app.dependency_overrides.clear()
@@ -203,7 +203,7 @@ def test_endpoints_without_valid_api_key_return_401_with_challenge(client, path,
 )
 def test_list_products_database_error_returns_503_without_internals(error):
     # Arrange
-    app.dependency_overrides[products_collection] = lambda: FakeCollection(error=error)
+    app.dependency_overrides[get_database] = lambda: {"products": FakeCollection(error=error)}
     vocab.clear_cache()
     client = TestClient(app, raise_server_exceptions=False)
 
