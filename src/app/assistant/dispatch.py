@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 
 from pydantic import ValidationError
@@ -30,18 +31,24 @@ INVOICE_PROJECTION = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+
 class ToolInputError(ValueError):
     pass
 
 
 def run_tool(db: Database, name: str, tool_input: Any) -> str:
+    logger.debug("tool %s called with %s", name, tool_input)
     try:
         result = _dispatch(db, name, tool_input)
     except ValidationError as exc:
         raise ToolInputError(_describe(exc)) from exc
     except vocab.UnknownVocabularyValue as exc:
         raise ToolInputError(f"{exc}. Call get_product_facets for allowed values.") from exc
-    return json.dumps(result, default=str, separators=(",", ":"), ensure_ascii=False)
+    content = json.dumps(result, default=str, separators=(",", ":"), ensure_ascii=False)
+    logger.debug("tool %s returned %s", name, content)
+    return content
 
 
 def _dispatch(db: Database, name: str, tool_input: Any) -> Any:
