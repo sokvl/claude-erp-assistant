@@ -15,3 +15,7 @@ def get_collection(name: str) -> Collection:
 # Injected rather than called inline so tests can override it without a live Mongo.
 def products_collection() -> Collection:
     return get_collection("products")
+
+
+def get_database() -> Database:
+    return _db
