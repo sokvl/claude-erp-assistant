@@ -16,7 +16,7 @@ URI = "mongodb://localhost:27017"
 def _gpu(sku, name, brand, price, vram, fp16, pooling, arch, memory, use_cases, **extra):
     return {
         "_id": sku, "sku": sku, "name": name, "brand": brand,
-        "category": "GPU", "listPrice": price,
+        "category": "GPU", "listPrice": price, "tier": "gpu_consumer",
         "specs": {
             "architecture": arch, "vramGb": vram, "memoryType": memory,
             "fp16TensorTflopsDense": fp16, "multiGpuScaling": pooling,
