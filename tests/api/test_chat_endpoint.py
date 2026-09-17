@@ -3,14 +3,25 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app.assistant.chat import ERROR_MESSAGES, Answer, ChatError, TextDelta, ToolCall
+from app.assistant.chat import ERROR_MESSAGES, Answer, ChatError, TextDelta, ToolCall, TraceStep
 from app.assistant.memory import ConversationStore, get_store
+from app.assistant.usage import USAGE_COLLECTION
 from app.config import API_KEY
+from app.db import get_database
 from app.main import app
 from app.routers import chat as chat_router
 from app.routers.chat import assistant_client, chat_tools
 
 AUTH = {"X-API-Key": API_KEY}
+MODEL_CALL_USAGE = {"input_tokens": 1200, "output_tokens": 80, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+
+
+class UsageCollection:
+    def __init__(self):
+        self.documents = []
+
+    def insert_one(self, document):
+        self.documents.append(document)
 
 
 class ConflictingStore(ConversationStore):
@@ -19,9 +30,10 @@ class ConflictingStore(ConversationStore):
 
 
 def _scripted_turn(*items, seen_history=None):
-    def fake_run_turn(client, db, tools, history, user_text):
+    def fake_run_turn(client, db, tools, history, user_text, steps):
         if seen_history is not None:
             seen_history.append(list(history))
+        steps.append(TraceStep("model.call", "ok", 5, "stop=end_turn", MODEL_CALL_USAGE))
         for item in items:
             if isinstance(item, BaseException):
                 raise item
@@ -43,8 +55,14 @@ def _events(response):
 
 
 @pytest.fixture
-def store():
+def usage():
+    return UsageCollection()
+
+
+@pytest.fixture
+def store(usage):
     fresh = ConversationStore()
+    app.dependency_overrides[get_database] = lambda: {USAGE_COLLECTION: usage}
     app.dependency_overrides[get_store] = lambda: fresh
     app.dependency_overrides[assistant_client] = lambda: object()
     app.dependency_overrides[chat_tools] = lambda: []
@@ -129,6 +147,7 @@ def test_chat_failed_turn_does_not_save_history(client, store, monkeypatch, fail
 
 def test_chat_history_changed_during_turn_reports_conflict(monkeypatch):
     # Arrange
+    app.dependency_overrides[get_database] = lambda: {USAGE_COLLECTION: UsageCollection()}
     app.dependency_overrides[get_store] = lambda: ConflictingStore()
     app.dependency_overrides[assistant_client] = lambda: object()
     app.dependency_overrides[chat_tools] = lambda: []
@@ -142,6 +161,29 @@ def test_chat_history_changed_during_turn_reports_conflict(monkeypatch):
 
     # Annihilate
     app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    ("items", "outcome"),
+    [
+        ((Answer("Hi", truncated=False),), "done"),
+        ((TextDelta("partial"), ChatError("assistant_busy")), "assistant_busy"),
+        ((TextDelta("partial"), KeyError("bug")), "unexpected_error"),
+    ],
+    ids=["answered", "chat_error", "unexpected_bug"],
+)
+def test_chat_any_turn_records_token_usage_with_outcome(client, usage, monkeypatch, items, outcome):
+    # Arrange
+    monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(*items))
+
+    # Act
+    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+
+    # Assert
+    [document] = usage.documents
+    assert (document["conversationId"], document["outcome"], document["modelCalls"], document["tokens"]) == (
+        events[0][1]["conversation_id"], outcome, 1, MODEL_CALL_USAGE,
+    )
 
 
 def test_chat_existing_conversation_passes_saved_history_to_turn(client, monkeypatch):
