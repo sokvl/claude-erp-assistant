@@ -39,6 +39,7 @@ Search the hardware distributor's product catalog: GPUs, CPUs, RAM, storage, mot
 Use this for any question about which products exist, what they cost, how they compare, or which hardware fits a workload. Answer product questions from its results, never from memory. All filters are optional and combine with AND.
 
 Map requests to filters:
+- A product type ("GPUs", "CPUs", "monitors") -> category. A brand alone spans every category, so "AMD GPUs" needs brand="AMD" and category="GPU".
 - Memory needs ("at least 24 GB", "run a 13B model") -> min_vram_gb.
 - Training, fine-tuning or inference workloads -> use_case, plus min_vram_gb for the model size.
 - Budget ("under $2,000") -> max_price.
@@ -69,7 +70,10 @@ Do not:
 - Use it for product or catalog questions; use search_products."""
 
 _VOCAB_DESCRIPTIONS = {
-    "category": "Product category. Omit when a GPU-only filter or sort is set; those already restrict results to GPUs.",
+    "category": (
+        "Product category. Set it whenever the user names a product type, including together with a brand. "
+        "Omit it only when a GPU-only filter or sort is set; those already restrict results to GPUs."
+    ),
     "brand": "Manufacturer, exact spelling from the list. If the user names a brand that is not listed, the catalog does not carry it: say so instead of searching.",
     "architecture": "GPU microarchitecture. GPU-only.",
     "memory_type": "GPU memory technology. GPU-only.",
