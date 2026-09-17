@@ -1,8 +1,11 @@
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-addopts = "-q --strict-markers -m 'not integration'"
-markers = ["integration: requires a live MongoDB on localhost:27017"]
+addopts = "-q --strict-markers -m 'not integration and not llm'"
+markers = [
+    "integration: requires a live MongoDB on localhost:27017",
+    "llm: calls the live Anthropic API; needs ANTHROPIC_API_KEY",
+]
 
 [tool.coverage.run]
 source = ["src/app"]
