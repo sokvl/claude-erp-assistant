@@ -1,4 +1,6 @@
 import logging
+import random
+import time
 from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -16,6 +18,7 @@ from app.assistant.prompts import SYSTEM_PROMPT
 MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 4096
 MAX_MODEL_CALLS = 6
+MID_STREAM_RETRIES = 2
 TIMEOUT = anthropic.Timeout(60.0, connect=5.0, read=30.0)
 
 RETRYABLE_ERROR_TYPES = frozenset({"overloaded_error", "api_error", "rate_limit_error"})
@@ -29,7 +32,10 @@ ERROR_MESSAGES = {
     "database_unavailable": "The product database is unavailable. Please try again later.",
     "too_many_steps": "The lookup took too many steps. Please ask a more specific question.",
     "conflict": "This conversation changed in the meantime. Please send your message again.",
+    "unexpected_error": "Something went wrong. Please try again.",
 }
+
+TOOL_FAILURE_MESSAGE = "The tool failed unexpectedly."
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +107,12 @@ def run_turn(
         if message.stop_reason in (None, "max_tokens"):
             raise ChatError("interrupted")
         if message.stop_reason == "refusal":
+            details = message.stop_details
+            logger.warning(
+                "model refused: category=%s explanation=%s",
+                details.category if details else None,
+                details.explanation if details else None,
+            )
             raise ChatError("refused")
         logger.error("unexpected stop_reason %r with %d tool_use blocks", message.stop_reason, len(tool_uses))
         raise ChatError("assistant_unavailable")
@@ -114,40 +126,47 @@ def _stream_once(
     messages: Sequence[dict[str, Any]],
     separate: bool,
 ) -> Generator[TextDelta, None, Message]:
-    try:
-        with client.messages.stream(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            tools=list(tools),
-            messages=list(messages),
-            cache_control={"type": "ephemeral"},
-        ) as stream:
-            started = False
-            for event in stream:
-                if event.type == "text" and event.text:
-                    if separate and not started:
-                        yield TextDelta("\n\n")
-                    started = True
-                    yield TextDelta(event.text)
-            message = stream.get_final_message()
-    except (
-        anthropic.RateLimitError,
-        anthropic.OverloadedError,
-        anthropic.InternalServerError,
-        anthropic.APIConnectionError,
-    ) as exc:
-        logger.warning("model request failed and is retryable: %s", exc)
-        raise ChatError("assistant_busy") from exc
-    except anthropic.APIStatusError as exc:
-        if exc.type in RETRYABLE_ERROR_TYPES:
-            logger.warning("model stream failed with %s", exc.type)
+    for attempt in range(MID_STREAM_RETRIES + 1):
+        shown = False
+        try:
+            with client.messages.stream(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                tools=list(tools),
+                messages=list(messages),
+                cache_control={"type": "ephemeral"},
+            ) as stream:
+                for event in stream:
+                    if event.type == "text" and event.text:
+                        if separate and not shown:
+                            yield TextDelta("\n\n")
+                        shown = True
+                        yield TextDelta(event.text)
+                message = stream.get_final_message()
+            break
+        except (
+            anthropic.RateLimitError,
+            anthropic.OverloadedError,
+            anthropic.InternalServerError,
+            anthropic.APIConnectionError,
+        ) as exc:
+            logger.warning("model request failed after SDK retries: %s", exc)
             raise ChatError("assistant_busy") from exc
-        logger.exception("model request rejected")
-        raise ChatError("assistant_unavailable") from exc
-    except httpx2.TransportError as exc:
-        logger.warning("model stream dropped: %r", exc)
-        raise ChatError("interrupted") from exc
+        except anthropic.APIStatusError as exc:
+            if exc.type not in RETRYABLE_ERROR_TYPES:
+                logger.exception("model request rejected")
+                raise ChatError("assistant_unavailable") from exc
+            if shown or attempt == MID_STREAM_RETRIES:
+                logger.warning("model stream failed with %s on attempt %d", exc.type, attempt + 1)
+                raise ChatError("assistant_busy") from exc
+            logger.warning("model stream failed with %s before any text, retrying", exc.type)
+        except httpx2.TransportError as exc:
+            if shown or attempt == MID_STREAM_RETRIES:
+                logger.warning("model stream dropped on attempt %d: %r", attempt + 1, exc)
+                raise ChatError("interrupted") from exc
+            logger.warning("model stream dropped before any text, retrying: %r", exc)
+        time.sleep(min(0.5 * 2**attempt, 8.0) * (1 - 0.25 * random.random()))
 
     usage = message.usage
     logger.info(
@@ -169,4 +188,7 @@ def _tool_result(db: Database, block: ToolUseBlock) -> dict[str, Any]:
     except PyMongoError as exc:
         logger.exception("tool %s failed on the database", block.name)
         raise ChatError("database_unavailable") from exc
+    except Exception:
+        logger.exception("tool %s failed unexpectedly", block.name)
+        return {"type": "tool_result", "tool_use_id": block.id, "content": TOOL_FAILURE_MESSAGE, "is_error": True}
     return {"type": "tool_result", "tool_use_id": block.id, "content": content}
