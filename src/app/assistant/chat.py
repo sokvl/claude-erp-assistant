@@ -65,17 +65,6 @@ def get_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(timeout=TIMEOUT, max_retries=2)
 
 
-def request_kwargs(tools: Sequence[dict[str, Any]], messages: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "model": MODEL,
-        "max_tokens": MAX_TOKENS,
-        "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        "tools": list(tools),
-        "messages": list(messages),
-        "cache_control": {"type": "ephemeral"},
-    }
-
-
 def run_turn(
     client: anthropic.Anthropic,
     db: Database,
@@ -126,7 +115,14 @@ def _stream_once(
     separate: bool,
 ) -> Generator[TextDelta, None, Message]:
     try:
-        with client.messages.stream(**request_kwargs(tools, messages)) as stream:
+        with client.messages.stream(
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            tools=list(tools),
+            messages=list(messages),
+            cache_control={"type": "ephemeral"},
+        ) as stream:
             started = False
             for event in stream:
                 if event.type == "text" and event.text:
