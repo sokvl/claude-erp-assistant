@@ -83,7 +83,7 @@ _VOCAB_DESCRIPTIONS = {
 def _vocabulary_properties(vocabularies: Mapping[str, Sequence[str]]) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     for param in vocab.VOCAB_FIELDS:
-        values = sorted(set(vocabularies[param]))
+        values = vocabularies[param]
         if not values:
             continue
         schema: dict[str, Any] = {"type": "string", "enum": values}
@@ -168,44 +168,36 @@ def build_search_products_tool(vocabularies: Mapping[str, Sequence[str]]) -> dic
     }
 
 
-def build_product_facets_tool() -> dict[str, Any]:
-    return {
-        "name": GET_PRODUCT_FACETS,
-        "description": GET_PRODUCT_FACETS_DESCRIPTION,
-        "strict": True,
-        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-    }
+PRODUCT_FACETS_TOOL: dict[str, Any] = {
+    "name": GET_PRODUCT_FACETS,
+    "description": GET_PRODUCT_FACETS_DESCRIPTION,
+    "strict": True,
+    "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+}
 
-
-def build_list_invoices_tool() -> dict[str, Any]:
-    fields = ListInvoicesInput.model_fields
-    return {
-        "name": LIST_INVOICES,
-        "description": LIST_INVOICES_DESCRIPTION,
-        "strict": True,
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "page": {
-                    "type": "integer",
-                    "default": fields["page"].default,
-                    "description": f"1-based page number, 1-{MAX_PAGE:,}.",
-                },
-                "page_size": {
-                    "type": "integer",
-                    "default": fields["page_size"].default,
-                    "description": f"Invoices per page, 1-{MAX_TOOL_PAGE_SIZE}.",
-                },
+LIST_INVOICES_TOOL: dict[str, Any] = {
+    "name": LIST_INVOICES,
+    "description": LIST_INVOICES_DESCRIPTION,
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "page": {
+                "type": "integer",
+                "default": ListInvoicesInput.model_fields["page"].default,
+                "description": f"1-based page number, 1-{MAX_PAGE:,}.",
             },
-            "additionalProperties": False,
+            "page_size": {
+                "type": "integer",
+                "default": ListInvoicesInput.model_fields["page_size"].default,
+                "description": f"Invoices per page, 1-{MAX_TOOL_PAGE_SIZE}.",
+            },
         },
-    }
+        "additionalProperties": False,
+    },
+}
 
 
 def build_tools(db: Database) -> list[dict[str, Any]]:
     vocabularies = vocab.get_all_vocabularies(db["products"])
-    return [
-        build_product_facets_tool(),
-        build_list_invoices_tool(),
-        build_search_products_tool(vocabularies),
-    ]
+    return [PRODUCT_FACETS_TOOL, LIST_INVOICES_TOOL, build_search_products_tool(vocabularies)]
