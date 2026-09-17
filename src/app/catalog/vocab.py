@@ -1,5 +1,5 @@
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 # Query param -> document path. Vocabularies come from the data, not a static
@@ -40,3 +40,17 @@ def get_all_vocabularies(collection: Any) -> dict[str, list[str]]:
 
 def clear_cache() -> None:
     _cache.clear()
+
+
+class UnknownVocabularyValue(ValueError):
+    def __init__(self, param: str, value: str) -> None:
+        super().__init__(f"Unknown {param}: {value!r}")
+        self.param = param
+        self.value = value
+
+
+def check_vocabulary(collection: Any, param: str, values: Iterable[str]) -> None:
+    allowed = get_vocabulary(collection, param)
+    for value in values:
+        if value not in allowed:
+            raise UnknownVocabularyValue(param, value)
