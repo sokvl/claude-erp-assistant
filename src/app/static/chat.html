@@ -55,11 +55,6 @@
   const keyInput = document.getElementById("key");
   let conversationId = null;
 
-  try { keyInput.value = localStorage.getItem("assistant-api-key") || ""; } catch {}
-  keyInput.addEventListener("change", () => {
-    try { localStorage.setItem("assistant-api-key", keyInput.value); } catch {}
-  });
-
   document.getElementById("reset").addEventListener("click", () => {
     conversationId = null;
     log.innerHTML = "";
