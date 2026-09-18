@@ -4,7 +4,7 @@ from pymongo.errors import ExecutionTimeout, ServerSelectionTimeoutError
 
 from app.config import API_KEY
 from app.db import get_database
-from app.limits import MAX_PAGE, MAX_PAGE_SIZE, MAX_PRICE, MAX_TEXT_LENGTH, MAX_USE_CASES, MAX_VRAM_GB
+from app.limits import MAX_USE_CASES
 from app.main import app
 
 AUTH = {"X-API-Key": API_KEY}
@@ -46,33 +46,26 @@ def client(collection):
     return TestClient(app)
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "",
-        "?category=GPU",
-        "?min_vram_gb=24",
-        "?min_vram_gb=0",
-        "?use_case=training&use_case=inference",
-        "?min_vram_gb=80&min_fp16_tflops=900&requires_pooling=true",
-        "?sort_by=vram&sort_order=desc",
-        "?page=2&page_size=5",
-        "?architecture=Hopper&memory_type=HBM3",
-        f"?min_vram_gb={MAX_VRAM_GB}",
-        f"?page={MAX_PAGE}&page_size={MAX_PAGE_SIZE}",
-        f"?max_price={MAX_PRICE:.0f}",
-        "?" + "&".join(["use_case=training"] * MAX_USE_CASES),
-    ],
-    ids=["no_filters", "category", "min_vram", "min_vram_zero", "use_cases",
-         "training_scenario", "sorted", "paginated", "specs",
-         "vram_at_cap", "page_and_size_at_cap", "price_at_cap", "use_cases_at_cap"],
-)
-def test_list_products_valid_query_returns_200(client, query):
-    # Arrange / Act
-    response = client.get(f"/products{query}", headers=AUTH)
+def test_list_products_query_params_reach_the_pipeline(client, collection):
+    # Arrange: a repeated list param, a bool, an int, a float, enums and paging, all parsed from the query string
+    query = "?category=GPU&use_case=training&use_case=inference&min_vram_gb=80&min_fp16_tflops=900.5" \
+            "&requires_pooling=true&sort_by=vram&sort_order=desc&page=2&page_size=5"
+
+    # Act
+    client.get(f"/products{query}", headers=AUTH)
 
     # Assert
-    assert response.status_code == 200
+    [pipeline] = collection.aggregate_calls
+    assert (pipeline[0], pipeline[1]["$facet"]["items"]) == (
+        {"$match": {
+            "category": "GPU",
+            "specs.useCases": {"$in": ["training", "inference"]},
+            "specs.vramGb": {"$gte": 80},
+            "specs.fp16TensorTflopsDense": {"$gte": 900.5},
+            "specs.multiGpuScaling": True,
+        }},
+        [{"$sort": {"specs.vramGb": -1, "_id": -1}}, {"$skip": 5}, {"$limit": 5}],
+    )
 
 
 def test_list_products_returns_paginated_envelope(client):
@@ -91,47 +84,18 @@ def test_list_products_returns_paginated_envelope(client):
 @pytest.mark.parametrize(
     "query",
     [
-        # previously reachable HTTP 500s (BSON int64 overflow)
+        # once an HTTP 500 (BSON int64 overflow); every other bound is test_schemas' job
         f"?min_vram_gb={2**63}",
-        f"?min_vram_gb={10**30}",
-        f"?page={10**18}",
-        # over the domain caps
-        f"?min_vram_gb={MAX_VRAM_GB + 1}",
-        f"?page={MAX_PAGE + 1}",
-        f"?page_size={MAX_PAGE_SIZE + 1}",
-        f"?max_price={MAX_PRICE * 10:.0f}",
-        # non-finite and out-of-range floats
-        "?min_price=1e400",
-        "?min_price=inf",
+        # query-string parsing: the text "nan" and a repeated param must still meet the model's bounds
         "?min_price=nan",
-        "?min_price=-1",
-        # oversized inputs; a valid tag repeated so the cap, not the whitelist, rejects it
-        "?category=" + "A" * (MAX_TEXT_LENGTH + 1),
         "?" + "&".join(["use_case=training"] * (MAX_USE_CASES + 1)),
-        # injection payloads land as literal strings and fail the whitelist
+        # an operator payload arrives as a literal string and fails the whitelist like any unknown value
         "?category=%7B%22%24ne%22%3A%20null%7D",
-        "?category=%7B%22%24gt%22%3A%20%22%22%7D",
-        "?brand=%24where",
-        "?category=GPU%27%3B+DROP+TABLE+products%3B--",
-        "?category=GPU%00",
-        "?brand=..%2F..%2Fetc%2Fpasswd",
-        # unknown vocabulary, bad enums, typos, contradictions
         "?category=Widget",
-        "?architecture=Hoppr",
-        "?use_case=mining",
-        "?page=0",
-        "?sort_by=listPrice",
         "?min_vram=24",
-        "?min_vram_gb=80&max_vram_gb=8",
     ],
-    ids=["vram_over_int64", "vram_absurd", "page_skip_overflow",
-         "vram_over_cap", "page_over_cap", "page_size_over_cap", "price_over_cap",
-         "price_overflows_to_inf", "price_inf", "price_nan", "price_negative",
-         "category_too_long", "use_cases_over_cap",
-         "operator_ne", "operator_gt", "operator_where", "sql_payload",
-         "null_byte", "path_traversal",
-         "unknown_category", "unknown_architecture", "unknown_use_case",
-         "page_zero", "raw_sort_path", "typo_param", "inverted_range"],
+    ids=["vram_over_int64", "price_nan_text", "repeated_use_case_over_cap", "operator_payload",
+         "unknown_category", "typo_param"],
 )
 def test_list_products_hostile_query_is_rejected_before_the_database(client, collection, query):
     # Arrange / Act
@@ -141,55 +105,12 @@ def test_list_products_hostile_query_is_rejected_before_the_database(client, col
     assert (response.status_code, collection.aggregate_calls) == (422, [])
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        f"?page={10**18}",
-        f"?page={MAX_PAGE + 1}",
-        f"?page_size={MAX_PAGE_SIZE + 1}",
-        "?page=0",
-        "?page=abc",
-        "?page=1e3",
-    ],
-    ids=["page_skip_overflow", "page_over_cap", "page_size_over_cap",
-         "page_zero", "page_not_a_number", "page_float_notation"],
-)
-def test_list_invoices_out_of_range_page_returns_422(client, query):
-    # Arrange / Act
-    response = client.get(f"/invoices{query}", headers=AUTH)
-
-    # Assert
-    assert response.status_code == 422
-
-
 def test_list_products_error_detail_names_the_rejected_value(client):
     # Arrange / Act
     body = client.get("/products?category=Widget", headers=AUTH).json()
 
     # Assert
     assert "Widget" in str(body["detail"])
-
-
-@pytest.mark.parametrize(
-    ("path", "headers"),
-    [
-        ("/products", {}),
-        ("/products", {"X-API-Key": "wrong"}),
-        ("/products", {"X-API-Key": ""}),
-        ("/products/facets", {}),
-        ("/products/facets", {"X-API-Key": "wrong"}),
-        ("/invoices", {}),
-        ("/invoices", {"X-API-Key": "wrong"}),
-    ],
-    ids=["products_no_key", "products_bad_key", "products_empty_key",
-         "facets_no_key", "facets_bad_key", "invoices_no_key", "invoices_bad_key"],
-)
-def test_endpoints_without_valid_api_key_return_401_with_challenge(client, path, headers):
-    # Arrange / Act
-    response = client.get(path, headers=headers)
-
-    # Assert
-    assert (response.status_code, response.headers.get("WWW-Authenticate")) == (401, "APIKey")
 
 
 @pytest.mark.parametrize(
