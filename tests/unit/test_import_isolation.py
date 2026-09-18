@@ -9,7 +9,14 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 # app.config reads API_KEY at import time and app.db builds a MongoClient, so
 # the pure modules staying clear of both is what lets this suite run with no
 # environment and no database.
-PURE_MODULES = ["app.catalog.enums", "app.catalog.query", "app.catalog.schemas"]
+PURE_MODULES = [
+    "app.catalog.enums",
+    "app.catalog.query",
+    "app.catalog.schemas",
+    "app.invoices.enums",
+    "app.invoices.query",
+    "app.invoices.schemas",
+]
 
 
 @pytest.mark.parametrize("module", PURE_MODULES, ids=PURE_MODULES)

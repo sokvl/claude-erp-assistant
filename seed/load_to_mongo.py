@@ -80,6 +80,7 @@ def ensure_indexes(collection):
     collection.create_index([("customer.number", ASCENDING)])
     collection.create_index([("isOpen", ASCENDING), ("dates.dueInDate", ASCENDING)])
     collection.create_index([("dates.clearDate", ASCENDING)], sparse=True)
+    collection.create_index([("dates.postingDate", ASCENDING), ("_id", ASCENDING)])
 
 
 def main():
