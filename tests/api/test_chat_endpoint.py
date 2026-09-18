@@ -145,22 +145,16 @@ def test_chat_failed_turn_does_not_save_history(client, store, monkeypatch, fail
     assert store.history(events[0][1]["conversation_id"]) == []
 
 
-def test_chat_history_changed_during_turn_reports_conflict(monkeypatch):
+def test_chat_history_changed_during_turn_reports_conflict(client, monkeypatch):
     # Arrange
-    app.dependency_overrides[get_database] = lambda: {USAGE_COLLECTION: UsageCollection()}
     app.dependency_overrides[get_store] = lambda: ConflictingStore()
-    app.dependency_overrides[assistant_client] = lambda: object()
-    app.dependency_overrides[chat_tools] = lambda: []
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
 
     # Act
-    events = _events(TestClient(app).post("/chat", json={"message": "question"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
 
     # Assert
     assert events[-1] == ("error", {"code": "conflict", "message": ERROR_MESSAGES["conflict"]})
-
-    # Annihilate
-    app.dependency_overrides.clear()
 
 
 @pytest.mark.parametrize(

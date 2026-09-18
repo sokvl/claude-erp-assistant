@@ -2,7 +2,6 @@ import pytest
 from fastapi.testclient import TestClient
 from pymongo.errors import ExecutionTimeout, ServerSelectionTimeoutError
 
-from app.catalog import vocab
 from app.config import API_KEY
 from app.db import get_database
 from app.limits import MAX_PAGE, MAX_PAGE_SIZE, MAX_PRICE, MAX_TEXT_LENGTH, MAX_USE_CASES, MAX_VRAM_GB
@@ -38,10 +37,8 @@ class FakeCollection:
 def collection():
     fake = FakeCollection()
     app.dependency_overrides[get_database] = lambda: {"products": fake}
-    vocab.clear_cache()
     yield fake
     app.dependency_overrides.clear()
-    vocab.clear_cache()
 
 
 @pytest.fixture
@@ -201,10 +198,9 @@ def test_endpoints_without_valid_api_key_return_401_with_challenge(client, path,
      ExecutionTimeout("operation exceeded time limit")],
     ids=["database_down", "query_timeout"],
 )
-def test_list_products_database_error_returns_503_without_internals(error):
+def test_list_products_database_error_returns_503_without_internals(collection, error):
     # Arrange
-    app.dependency_overrides[get_database] = lambda: {"products": FakeCollection(error=error)}
-    vocab.clear_cache()
+    collection.error = error
     client = TestClient(app, raise_server_exceptions=False)
 
     # Act
@@ -212,10 +208,6 @@ def test_list_products_database_error_returns_503_without_internals(error):
 
     # Assert
     assert (response.status_code, response.json()) == (503, {"detail": "Database unavailable"})
-
-    # Annihilate
-    app.dependency_overrides.clear()
-    vocab.clear_cache()
 
 
 def test_list_facets_returns_live_vocabularies(client):
