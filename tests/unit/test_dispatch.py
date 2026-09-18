@@ -4,7 +4,6 @@ from datetime import datetime
 import pytest
 
 from app.assistant.dispatch import INVOICE_PROJECTION, ToolInputError, run_tool
-from app.catalog import vocab
 
 VOCABULARIES = {
     "category": ["GPU", "CPU"],
@@ -53,13 +52,6 @@ class FakeInvoices:
 
     def estimated_document_count(self):
         return 48839
-
-
-@pytest.fixture(autouse=True)
-def _clear_vocabulary_cache():
-    vocab.clear_cache()
-    yield
-    vocab.clear_cache()
 
 
 @pytest.fixture

@@ -37,7 +37,6 @@ def test_seeded_use_case_tags_stay_within_the_controlled_vocabulary(mongo_client
 )
 def test_live_vocabulary_matches_the_seeded_catalog(mongo_client, param, expected):
     # Arrange
-    vocab.clear_cache()
     products = mongo_client["invoices_db"]["products"]
 
     # Act
@@ -45,4 +44,3 @@ def test_live_vocabulary_matches_the_seeded_catalog(mongo_client, param, expecte
 
     # Assert
     assert values == frozenset(expected)
-    vocab.clear_cache()

@@ -13,13 +13,6 @@ class FakeCollection:
         return self.values
 
 
-@pytest.fixture(autouse=True)
-def _clear_cache():
-    vocab.clear_cache()
-    yield
-    vocab.clear_cache()
-
-
 @pytest.mark.parametrize(
     ("param", "expected_path"),
     [

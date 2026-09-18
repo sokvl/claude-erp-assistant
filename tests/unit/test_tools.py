@@ -51,13 +51,6 @@ class FakeProducts:
         return self.values_by_path[path]
 
 
-@pytest.fixture(autouse=True)
-def _clear_vocabulary_cache():
-    vocab.clear_cache()
-    yield
-    vocab.clear_cache()
-
-
 @pytest.mark.parametrize("field", list(VOCABULARIES), ids=list(VOCABULARIES))
 def test_build_search_products_tool_injects_vocabulary_as_enum(field):
     # Arrange / Act
