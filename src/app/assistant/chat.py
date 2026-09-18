@@ -3,6 +3,7 @@ import random
 import time
 from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass
+from datetime import date
 from functools import cache
 from typing import Any
 from uuid import uuid4
@@ -14,10 +15,8 @@ from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
 from app.assistant.dispatch import ToolInputError, run_tool
-from app.assistant.prompts import SYSTEM_PROMPT
+from app.assistant.profiles import Profile
 
-MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 4096
 MAX_MODEL_CALLS = 6
 MID_STREAM_RETRIES = 2
 TIMEOUT = anthropic.Timeout(60.0, connect=5.0, read=30.0)
@@ -30,7 +29,7 @@ ERROR_MESSAGES = {
     "interrupted": "The answer was interrupted. Please ask again.",
     "refused": "The assistant can't help with that request.",
     "empty_answer": "No answer was produced. Please rephrase the question.",
-    "database_unavailable": "The product database is unavailable. Please try again later.",
+    "database_unavailable": "The database is unavailable. Please try again later.",
     "too_many_steps": "The lookup took too many steps. Please ask a more specific question.",
     "conflict": "This conversation changed in the meantime. Please send your message again.",
     "unexpected_error": "Something went wrong. Please try again.",
@@ -81,9 +80,24 @@ def get_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(timeout=TIMEOUT, max_retries=2)
 
 
+def build_request(profile: Profile, tools: Sequence[dict[str, Any]], today: date) -> dict[str, Any]:
+    system = [{"type": "text", "text": profile.system_prompt, "cache_control": {"type": "ephemeral"}}]
+    if profile.dated:
+        system.append({"type": "text", "text": f"Today's date: {today.isoformat()}."})
+    return {
+        "model": profile.model,
+        "max_tokens": profile.max_tokens,
+        "system": system,
+        "tools": list(tools),
+        "cache_control": {"type": "ephemeral"},
+        **profile.options,
+    }
+
+
 def run_turn(
     client: anthropic.Anthropic,
     db: Database,
+    profile: Profile,
     tools: Sequence[dict[str, Any]],
     history: Sequence[dict[str, Any]],
     user_text: str,
@@ -93,7 +107,8 @@ def run_turn(
     run_id = uuid4().hex[:8]
     outcome = "closed"
     try:
-        yield from _run_turn(client, db, tools, history, user_text, steps)
+        request = build_request(profile, tools, date.today())
+        yield from _run_turn(client, db, request, history, user_text, steps)
         outcome = "done"
     except ChatError as exc:
         outcome = exc.code
@@ -108,7 +123,7 @@ def run_turn(
 def _run_turn(
     client: anthropic.Anthropic,
     db: Database,
-    tools: Sequence[dict[str, Any]],
+    request: dict[str, Any],
     history: Sequence[dict[str, Any]],
     user_text: str,
     steps: list[TraceStep],
@@ -117,7 +132,7 @@ def _run_turn(
     texts: list[str] = []
 
     for _ in range(MAX_MODEL_CALLS):
-        message = yield from _stream_once(client, tools, messages, bool(texts), steps)
+        message = yield from _stream_once(client, request, messages, bool(texts), steps)
         texts.extend(block.text for block in message.content if block.type == "text" and block.text.strip())
         tool_uses = [block for block in message.content if block.type == "tool_use"]
 
@@ -157,7 +172,7 @@ def _run_turn(
 
 def _stream_once(
     client: anthropic.Anthropic,
-    tools: Sequence[dict[str, Any]],
+    request: dict[str, Any],
     messages: Sequence[dict[str, Any]],
     separate: bool,
     steps: list[TraceStep],
@@ -166,14 +181,7 @@ def _stream_once(
         shown = False
         started_at = time.perf_counter()
         try:
-            with client.messages.stream(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                tools=list(tools),
-                messages=list(messages),
-                cache_control={"type": "ephemeral"},
-            ) as stream:
+            with client.messages.stream(**request, messages=list(messages)) as stream:
                 for event in stream:
                     if event.type == "text" and event.text:
                         if separate and not shown:

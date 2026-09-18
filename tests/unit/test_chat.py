@@ -1,5 +1,6 @@
 import copy
 import logging
+from datetime import date
 from types import SimpleNamespace
 
 import anthropic
@@ -11,15 +12,17 @@ from pymongo.errors import ServerSelectionTimeoutError
 from app.assistant import chat
 from app.assistant.chat import (
     MAX_MODEL_CALLS,
-    MODEL,
     TOOL_FAILURE_MESSAGE,
     Answer,
     ChatError,
     TextDelta,
     ToolCall,
+    build_request,
     run_turn,
 )
 from app.assistant.dispatch import ToolInputError
+from app.assistant.profiles import ADVISOR, ADVISOR_MODEL, ANALYST, ANALYST_MODEL
+from app.assistant.prompts import ANALYST_PROMPT, SYSTEM_PROMPT
 
 REQUEST = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
 TOOL_OUTPUT = '{"items":[]}'
@@ -31,7 +34,7 @@ def _message(stop_reason, *content, stop_details=None):
             "id": "msg_1",
             "type": "message",
             "role": "assistant",
-            "model": MODEL,
+            "model": ADVISOR_MODEL,
             "content": list(content),
             "stop_reason": stop_reason,
             "stop_sequence": None,
@@ -108,8 +111,8 @@ def _tool_round(*blocks):
     return FakeStream([], _message("tool_use", *(blocks or (_tool_use(),))))
 
 
-def _run(client, history=()):
-    return list(run_turn(client, None, [], list(history), "question"))
+def _run(client, history=(), profile=ADVISOR):
+    return list(run_turn(client, None, profile, [], list(history), "question"))
 
 
 def _fail_tool(monkeypatch, error):
@@ -422,28 +425,92 @@ def test_run_turn_does_not_mutate_history():
     client = FakeClient(_tool_round(), _answer())
 
     # Act
-    list(run_turn(client, None, [], history, "question"))
+    list(run_turn(client, None, ADVISOR, [], history, "question"))
 
     # Assert
     assert history == snapshot
 
 
-def test_run_turn_request_pins_model_and_cache_breakpoints():
+def test_run_turn_request_appends_the_question_after_history():
     # Arrange
     client = FakeClient(_answer())
+    history = [{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "reply"}]
 
     # Act
-    _run(client, history=[{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "reply"}])
+    _run(client, history=history)
 
     # Assert
-    request = client.requests[0]
-    assert (
-        request["model"],
-        request["system"][0]["cache_control"],
-        request["cache_control"],
-        request["messages"][-1],
-        "thinking" in request,
-    ) == (MODEL, {"type": "ephemeral"}, {"type": "ephemeral"}, {"role": "user", "content": "question"}, False)
+    assert client.requests[0]["messages"] == [*history, {"role": "user", "content": "question"}]
+
+
+TOOLS = [{"name": "some_tool"}]
+CACHED = {"type": "ephemeral"}
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [
+        (
+            ADVISOR,
+            {
+                "model": ADVISOR_MODEL,
+                "max_tokens": 4096,
+                "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": CACHED}],
+                "tools": TOOLS,
+                "cache_control": CACHED,
+            },
+        ),
+        (
+            ANALYST,
+            {
+                "model": ANALYST_MODEL,
+                "max_tokens": 64_000,
+                "system": [
+                    {"type": "text", "text": ANALYST_PROMPT, "cache_control": CACHED},
+                    {"type": "text", "text": "Today's date: 2026-09-18."},
+                ],
+                "tools": TOOLS,
+                "cache_control": CACHED,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "medium"},
+                "timeout": ANALYST.options["timeout"],
+            },
+        ),
+    ],
+    ids=["advisor_without_thinking_or_date", "analyst_with_thinking_effort_timeout_and_uncached_date"],
+)
+def test_build_request_pins_model_prompt_and_cache_breakpoints(profile, expected):
+    # Arrange / Act
+    request = build_request(profile, TOOLS, date(2026, 9, 18))
+
+    # Assert
+    assert request == expected
+
+
+def test_run_turn_computes_the_date_once_so_every_call_of_a_tool_loop_shares_one_prefix(monkeypatch):
+    # Arrange: the clock crosses midnight between the two model calls
+    days = iter([date(2026, 9, 18), date(2026, 9, 19)])
+    monkeypatch.setattr(chat, "date", SimpleNamespace(today=lambda: next(days)))
+    client = FakeClient(_tool_round(), _answer())
+
+    # Act
+    _run(client, profile=ANALYST)
+
+    # Assert
+    first, second = ({key: value for key, value in request.items() if key != "messages"} for request in client.requests)
+    assert first == second
+
+
+def test_run_turn_echoes_thinking_blocks_back_unchanged_in_the_tool_loop():
+    # Arrange
+    thinking = {"type": "thinking", "thinking": "", "signature": "sig_1"}
+    client = FakeClient(_tool_round(thinking, _tool_use()), _answer())
+
+    # Act
+    _run(client, profile=ANALYST)
+
+    # Assert
+    assert client.requests[1]["messages"][-2]["content"][0] == thinking
 
 
 def test_run_turn_refusal_is_logged_with_its_category(caplog):
@@ -462,7 +529,7 @@ def test_run_turn_refusal_is_logged_with_its_category(caplog):
 
 def _run_traced(client, steps):
     try:
-        list(run_turn(client, None, [], [], "question", steps=steps))
+        list(run_turn(client, None, ADVISOR, [], [], "question", steps=steps))
     except ChatError:
         pass
 

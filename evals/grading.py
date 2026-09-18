@@ -2,25 +2,35 @@ import json
 import re
 from typing import Any
 
-from app.assistant.dispatch import INVOICE_PROJECTION
-from app.assistant.prompts import OUT_OF_SCOPE_REPLY
-from app.assistant.tools import LIST_INVOICES, SEARCH_PRODUCTS, ListInvoicesInput
+from app.assistant.prompts import ANALYST_OUT_OF_SCOPE_REPLY, OUT_OF_SCOPE_REPLY
+from app.assistant.tools import ANALYZE_INVOICES, LIST_INVOICES, SEARCH_PRODUCTS, ListInvoicesInput
 from app.catalog.schemas import ProductSearchParams
 from app.catalog.service import search_catalog
+from app.invoices.schemas import InvoiceAnalyticsParams
+from app.invoices.service import analyze_invoices, list_invoices
 from app.limits import MAX_PAGE_SIZE
-from app.pagination import paginate
 from cases import Case, Gold
 
 TABLE = re.compile(r"^\s*\|.*\|\s*\n\s*\|[\s:|-]*-{3,}", re.MULTILINE)
 SKU = re.compile(r"\b[A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]+)+\b")
-ROW_TOOLS = (SEARCH_PRODUCTS, LIST_INVOICES)
+ROW_TOOLS = (SEARCH_PRODUCTS, LIST_INVOICES, ANALYZE_INVOICES)
+REFUSALS = {"advisor": OUT_OF_SCOPE_REPLY, "analyst": ANALYST_OUT_OF_SCOPE_REPLY}
+
+
+def _analytics(db: Any, params: dict[str, Any]) -> dict[str, Any]:
+    return analyze_invoices(db["invoices"], InvoiceAnalyticsParams.model_validate(params))
+
+
+def _row_ids(result: dict[str, Any]) -> frozenset[str]:
+    return frozenset(f"{entry['currency']}:{row.get('key')}" for entry in result["currencies"] for row in entry["rows"])
 
 
 def query_ids(db: Any, tool: str, params: dict[str, Any], expand: bool) -> frozenset[str]:
     if tool == LIST_INVOICES:
-        query = ListInvoicesInput.model_validate(params)
-        items = paginate(db["invoices"], query.page, query.page_size, INVOICE_PROJECTION)["items"]
+        items = list_invoices(db["invoices"], ListInvoicesInput.model_validate(params))["items"]
         return frozenset(item["invoiceId"] for item in items)
+    if tool == ANALYZE_INVOICES:
+        return _row_ids(_analytics(db, params))
     paging = {"page": 1, "page_size": MAX_PAGE_SIZE} if expand else {}
     items = search_catalog(db["products"], ProductSearchParams.model_validate({**params, **paging}))["items"]
     return frozenset(item["sku"] for item in items)
@@ -31,8 +41,11 @@ def gold_ids(db: Any, gold: Gold) -> frozenset[str]:
 
 
 def output_ids(call: dict[str, Any]) -> frozenset[str]:
+    output = json.loads(call["output"])
+    if call["name"] == ANALYZE_INVOICES:
+        return _row_ids(output)
     key = "invoiceId" if call["name"] == LIST_INVOICES else "sku"
-    return frozenset(item[key] for item in json.loads(call["output"]).get("items", []))
+    return frozenset(item[key] for item in output.get("items", []))
 
 
 def matches(rule: str, actual: frozenset[str], expected: frozenset[str]) -> bool:
@@ -48,7 +61,7 @@ def grade(
     final: bool,
 ) -> list[str]:
     names = [call["name"] for call in calls]
-    refused = answer.strip() == OUT_OF_SCOPE_REPLY
+    refused = answer.strip() == REFUSALS[case.assistant]
     if case.refusal:
         return [f"[scope] called {names} instead of refusing"] * bool(calls) + [
             f"[scope] expected the exact refusal, got {answer[:160]!r}"
@@ -71,6 +84,8 @@ def grade(
     ]
     if case.table and not TABLE.search(answer):
         failures.append("[format] expected a markdown table")
+    if case.assistant == "analyst":
+        return failures + (_grade_figures(db, case.gold, answer) if case.gold and case.gold.figure else [])
 
     prefixes = {sku.split("-")[0] for sku in catalog}
     mentioned = {token for token in SKU.findall(answer) if token.split("-")[0] in prefixes}
@@ -107,6 +122,14 @@ def _grade_asked(db: Any, gold: Gold, calls: list[dict[str, Any]]) -> list[str]:
     if len(attempts) > 1 and matches(gold.results, combined, expected):
         return []
     return [f"[retrieval] gold {gold.params} ({gold.results}) -> {sorted(expected)}; asked: {'; '.join(attempts) or 'nothing'}"]
+
+
+def _grade_figures(db: Any, gold: Gold, answer: str) -> list[str]:
+    return [
+        f"[answer] {entry['currency']} {gold.figure} {entry['rows'][0][gold.figure]:,.2f} not stated"
+        for entry in _analytics(db, gold.params)["currencies"]
+        if not _price_stated(entry["rows"][0][gold.figure], answer)
+    ]
 
 
 def _price_stated(price: float, answer: str) -> bool:

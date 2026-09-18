@@ -1,29 +1,26 @@
-from typing import Annotated, Self
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.catalog.enums import SortField, SortOrder
+from app.catalog.enums import Architecture, Brand, Category, MemoryType, SortField, SortOrder, UseCase
 from app.limits import (
     MAX_PAGE,
     MAX_PAGE_SIZE,
     MAX_PRICE,
-    MAX_TEXT_LENGTH,
     MAX_TFLOPS,
     MAX_USE_CASES,
     MAX_VRAM_GB,
 )
 
-VocabValue = Annotated[str, Field(max_length=MAX_TEXT_LENGTH)]
-
 
 class ProductSearchParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    category: VocabValue | None = None
-    brand: VocabValue | None = None
-    architecture: VocabValue | None = None
-    memory_type: VocabValue | None = None
-    use_case: list[VocabValue] = Field(default_factory=list, max_length=MAX_USE_CASES)
+    category: Category | None = None
+    brand: Brand | None = None
+    architecture: Architecture | None = None
+    memory_type: MemoryType | None = None
+    use_case: list[UseCase] = Field(default_factory=list, max_length=MAX_USE_CASES)
 
     min_vram_gb: int | None = Field(None, ge=0, le=MAX_VRAM_GB)
     max_vram_gb: int | None = Field(None, ge=0, le=MAX_VRAM_GB)

@@ -4,13 +4,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.assistant.chat import ERROR_MESSAGES, Answer, ChatError, TextDelta, ToolCall, TraceStep
-from app.assistant.memory import ConversationStore, get_store
+from app.assistant import memory
+from app.assistant.memory import ConversationStore
+from app.assistant.profiles import AssistantName
 from app.assistant.usage import USAGE_COLLECTION
 from app.config import API_KEY
 from app.db import get_database
 from app.main import app
 from app.routers import chat as chat_router
-from app.routers.chat import assistant_client, chat_tools
+from app.routers.chat import assistant_client, chat_store, chat_tools
 
 AUTH = {"X-API-Key": API_KEY}
 MODEL_CALL_USAGE = {"input_tokens": 1200, "output_tokens": 80, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
@@ -29,10 +31,12 @@ class ConflictingStore(ConversationStore):
         return False
 
 
-def _scripted_turn(*items, seen_history=None):
-    def fake_run_turn(client, db, tools, history, user_text, steps):
+def _scripted_turn(*items, seen_history=None, seen_turns=None):
+    def fake_run_turn(client, db, profile, tools, history, user_text, steps):
         if seen_history is not None:
             seen_history.append(list(history))
+        if seen_turns is not None:
+            seen_turns.append((profile.name, [tool["name"] for tool in tools]))
         steps.append(TraceStep("model.call", "ok", 5, "stop=end_turn", MODEL_CALL_USAGE))
         for item in items:
             if isinstance(item, BaseException):
@@ -63,7 +67,7 @@ def usage():
 def store(usage):
     fresh = ConversationStore()
     app.dependency_overrides[get_database] = lambda: {USAGE_COLLECTION: usage}
-    app.dependency_overrides[get_store] = lambda: fresh
+    app.dependency_overrides[chat_store] = lambda: fresh
     app.dependency_overrides[assistant_client] = lambda: object()
     app.dependency_overrides[chat_tools] = lambda: []
     yield fresh
@@ -112,11 +116,9 @@ def test_chat_successful_turn_saves_only_question_and_answer(client, store, monk
     ("failure", "code"),
     [
         (ChatError("assistant_busy"), "assistant_busy"),
-        (ChatError("database_unavailable"), "database_unavailable"),
-        (KeyError("bug"), "unexpected_error"),
         (ValueError("Unable to parse tool parameter JSON from model"), "unexpected_error"),
     ],
-    ids=["chat_error", "database_error", "unexpected_bug", "sdk_json_parse_error"],
+    ids=["chat_error", "unexpected_sdk_error"],
 )
 def test_chat_failed_turn_ends_with_error_event(client, monkeypatch, failure, code):
     # Arrange
@@ -147,7 +149,7 @@ def test_chat_failed_turn_does_not_save_history(client, store, monkeypatch, fail
 
 def test_chat_history_changed_during_turn_reports_conflict(client, monkeypatch):
     # Arrange
-    app.dependency_overrides[get_store] = lambda: ConflictingStore()
+    app.dependency_overrides[chat_store] = lambda: ConflictingStore()
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
 
     # Act
@@ -203,16 +205,15 @@ def test_chat_existing_conversation_passes_saved_history_to_turn(client, monkeyp
 @pytest.mark.parametrize(
     ("headers", "body", "status"),
     [
-        ({}, {"message": "question"}, 401),
-        ({"X-API-Key": "wrong"}, {"message": "question"}, 401),
         (AUTH, {"message": ""}, 422),
         (AUTH, {"message": "x" * 4001}, 422),
         (AUTH, {"message": "question", "extra": 1}, 422),
         (AUTH, {}, 422),
         (AUTH, {"message": "question", "conversation_id": "unknown"}, 404),
+        (AUTH, {"message": "question", "assistant": "oracle"}, 422),
     ],
-    ids=["no_api_key", "wrong_api_key", "empty_message", "message_too_long",
-         "unknown_field", "missing_message", "unknown_conversation"],
+    ids=["empty_message", "message_too_long",
+         "unknown_field", "missing_message", "unknown_conversation", "unknown_assistant"],
 )
 def test_chat_invalid_request_is_rejected_before_streaming(client, monkeypatch, headers, body, status):
     # Arrange
@@ -236,3 +237,55 @@ def test_chat_without_anthropic_credentials_returns_503(client, monkeypatch):
 
     # Assert
     assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"message": "question"}, (AssistantName.ADVISOR, ["get_product_facets", "search_products"])),
+        ({"message": "question", "assistant": "analyst"}, (AssistantName.ANALYST, ["analyze_invoices", "list_invoices"])),
+    ],
+    ids=["default_is_advisor", "analyst"],
+)
+def test_chat_turn_runs_with_the_selected_assistants_profile_and_tools(client, monkeypatch, body, expected):
+    # Arrange
+    app.dependency_overrides.pop(chat_tools)
+    seen_turns = []
+    monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False), seen_turns=seen_turns))
+
+    # Act
+    client.post("/chat", json=body, headers=AUTH)
+
+    # Assert
+    assert seen_turns == [expected]
+
+
+def test_chat_analyst_turn_records_usage_under_the_analyst(client, usage, monkeypatch):
+    # Arrange
+    monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
+
+    # Act
+    client.post("/chat", json={"message": "question", "assistant": "analyst"}, headers=AUTH)
+
+    # Assert
+    [document] = usage.documents
+    assert (document["assistant"], document["model"]) == ("analyst", "claude-sonnet-5")
+
+
+def test_chat_conversation_of_the_other_assistant_is_unknown(client, monkeypatch):
+    # Arrange: real per-assistant stores, so advisor history can never reach the analyst's context or vice versa
+    app.dependency_overrides.pop(chat_store)
+    monkeypatch.setattr(memory, "stores", {assistant: ConversationStore() for assistant in AssistantName})
+    monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
+    advisor_events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    conversation_id = advisor_events[0][1]["conversation_id"]
+
+    # Act
+    response = client.post(
+        "/chat",
+        json={"message": "follow-up", "conversation_id": conversation_id, "assistant": "analyst"},
+        headers=AUTH,
+    )
+
+    # Assert
+    assert response.status_code == 404

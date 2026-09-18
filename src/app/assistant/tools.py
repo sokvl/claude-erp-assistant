@@ -1,16 +1,21 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-from pymongo.database import Database
+from pydantic import Field
 
-from app.catalog import vocab
-from app.catalog.enums import SortField, SortOrder
+from app.assistant.profiles import AssistantName
+from app.catalog.enums import Architecture, Brand, Category, MemoryType, SortField, SortOrder, UseCase
 from app.catalog.schemas import ProductSearchParams
+from app.invoices.enums import GroupBy, InvoiceSortField, InvoiceStatus
+from app.invoices.schemas import InvoiceListParams
 from app.limits import (
+    DEFAULT_ANALYTICS_ROWS,
     DEFAULT_TOOL_PAGE_SIZE,
+    MAX_AMOUNT,
+    MAX_ANALYTICS_ROWS,
     MAX_PAGE,
     MAX_PRICE,
+    MAX_TEXT_LENGTH,
     MAX_TFLOPS,
     MAX_TOOL_PAGE_SIZE,
     MAX_USE_CASES,
@@ -20,16 +25,14 @@ from app.limits import (
 SEARCH_PRODUCTS = "search_products"
 GET_PRODUCT_FACETS = "get_product_facets"
 LIST_INVOICES = "list_invoices"
+ANALYZE_INVOICES = "analyze_invoices"
 
 
 class SearchProductsInput(ProductSearchParams):
     page_size: int = Field(DEFAULT_TOOL_PAGE_SIZE, ge=1, le=MAX_TOOL_PAGE_SIZE)
 
 
-class ListInvoicesInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    page: int = Field(1, ge=1, le=MAX_PAGE)
+class ListInvoicesInput(InvoiceListParams):
     page_size: int = Field(DEFAULT_TOOL_PAGE_SIZE, ge=1, le=MAX_TOOL_PAGE_SIZE)
 
 
@@ -60,46 +63,67 @@ Use this when the user asks what the catalog carries, e.g. "which brands do you 
 
 Do not call it before a search: search_products already lists every allowed value in its schema."""
 
-LIST_INVOICES_DESCRIPTION = """Return one page of accounts-receivable invoice records. Returns {page, pageSize, total, items}; each item has the invoice id, customer name and number, currency, open amount, open or cleared status, and posting, due and clear dates.
+LIST_INVOICES_DESCRIPTION = """Find individual accounts-receivable invoices. Returns {page, pageSize, total, items}; total counts every invoice matching the filters, and each item has invoiceId, customer (number and name), currency, amounts.totalOpen (the invoice amount), isOpen, and posting, due and clear dates.
 
-Use this only to show the user a sample of invoices or to browse a page they explicitly ask for.
+Use this to show specific invoices: a customer's open invoices, the largest invoices of a period, the newest invoices, or the invoices behind a figure from analyze_invoices. All filters are optional and combine with AND. To count matching invoices, read total.
 
 Do not:
-- Use it to find a specific invoice, a specific customer's invoices, open or overdue invoices, or totals. It has no filters and there are tens of thousands of records, so paging to find something is wrong. Tell the user that kind of lookup is not supported yet.
-- Repeat customer names or amounts unless the user asked about those records.
-- Use it for product or catalog questions; use search_products."""
+- Page through invoices to add up, average or rank them; use analyze_invoices for any total, average, ranking or trend.
+- Use it for product or catalog questions."""
 
-_VOCAB_DESCRIPTIONS = {
-    "category": (
-        "Product category. Set it whenever the user names a product type, including together with a brand. "
-        "Omit it only when a GPU-only filter or sort is set; those already restrict results to GPUs."
-    ),
-    "brand": "Manufacturer, exact spelling from the list. If the user names a brand that is not listed, the catalog does not carry it: say so instead of searching.",
-    "architecture": "GPU microarchitecture. GPU-only.",
-    "memory_type": "GPU memory technology. GPU-only.",
-    "use_case": (
-        "GPU workload tags; matches GPUs tagged with ANY listed value. Tags describe the kind of "
-        f"workload, not model size - express size with min_vram_gb. At most {MAX_USE_CASES} values. GPU-only."
-    ),
-}
+ANALYZE_INVOICES_DESCRIPTION = f"""Compute invoice figures in the database. Returns {{asOf, groupBy, filters, coverage, currencies}}. filters echoes the filters that were applied; state the period and filters from it. coverage gives the first and last posting date in the whole data set, not in the result. currencies has one entry per invoice currency with groupCount (number of groups) and rows. Every row has invoiceCount, totalAmount, averageAmount (per invoice), openAmount (unpaid), overdueAmount (unpaid and due before asOf) and averageDaysToPay (posting to payment, paid invoices only). Amounts are in that entry's currency, rounded to cents.
 
+Without group_by each currency has one row with its totals. With group_by the rows are:
+- customer: one row per customer number (key) with a customer name (label), largest totalAmount first.
+- product, brand, category: built from invoice lines; totalAmount is the value of those lines and units the quantity sold. Product rows add the product name (label) and averageUnitPrice. Largest totalAmount first.
+- month, quarter, year: one row per period of posting date, key = first day of the period, oldest first.
 
-def _vocabulary_properties(vocabularies: Mapping[str, Sequence[str]]) -> dict[str, Any]:
-    properties: dict[str, Any] = {}
-    for param in vocab.VOCAB_FIELDS:
-        values = vocabularies[param]
-        if not values:
-            continue
-        schema: dict[str, Any] = {"type": "string", "enum": values}
-        if param == "use_case":
-            schema = {"type": "array", "items": schema}
-        properties[param] = {**schema, "description": _VOCAB_DESCRIPTIONS[param]}
-    return properties
+Map requests to parameters:
+- A period ("Q1 2020", "in 2019", "last month") -> posted_from and posted_to.
+- "Top N", "largest", "best-selling" -> group_by with limit=N.
+- "Trend", "per month", "by quarter" -> group_by=month, quarter or year.
+- Outstanding or overdue money -> openAmount and overdueAmount; set as_of when the user names a reference date.
 
+Rankings return {DEFAULT_ANALYTICS_ROWS} rows per currency unless limit is set, periods up to {MAX_ANALYTICS_ROWS}. If groupCount is larger than the number of rows, the list was cut.
+
+Do not:
+- Add, compare or rank amounts across currencies; every currency is reported separately.
+- Use it for product or catalog questions."""
 
 def _search_properties() -> dict[str, Any]:
     fields = SearchProductsInput.model_fields
     return {
+        "category": {
+            "type": "string",
+            "enum": [member.value for member in Category],
+            "description": (
+                "Product category. Set it whenever the user names a product type, including together with a brand. "
+                "Omit it only when a GPU-only filter or sort is set; those already restrict results to GPUs."
+            ),
+        },
+        "brand": {
+            "type": "string",
+            "enum": [member.value for member in Brand],
+            "description": "Manufacturer, exact spelling from the list. If the user names a brand that is not listed, the catalog does not carry it: say so instead of searching.",
+        },
+        "architecture": {
+            "type": "string",
+            "enum": [member.value for member in Architecture],
+            "description": "GPU microarchitecture. GPU-only.",
+        },
+        "memory_type": {
+            "type": "string",
+            "enum": [member.value for member in MemoryType],
+            "description": "GPU memory technology. GPU-only.",
+        },
+        "use_case": {
+            "type": "array",
+            "items": {"type": "string", "enum": [member.value for member in UseCase]},
+            "description": (
+                "GPU workload tags; matches GPUs tagged with ANY listed value. Tags describe the kind of "
+                f"workload, not model size - express size with min_vram_gb. At most {MAX_USE_CASES} values. GPU-only."
+            ),
+        },
         "min_vram_gb": {
             "type": "integer",
             "description": (
@@ -159,17 +183,16 @@ def _search_properties() -> dict[str, Any]:
     }
 
 
-def build_search_products_tool(vocabularies: Mapping[str, Sequence[str]]) -> dict[str, Any]:
-    return {
-        "name": SEARCH_PRODUCTS,
-        "description": SEARCH_PRODUCTS_DESCRIPTION,
-        "strict": True,
-        "input_schema": {
-            "type": "object",
-            "properties": _vocabulary_properties(vocabularies) | _search_properties(),
-            "additionalProperties": False,
-        },
-    }
+SEARCH_PRODUCTS_TOOL: dict[str, Any] = {
+    "name": SEARCH_PRODUCTS,
+    "description": SEARCH_PRODUCTS_DESCRIPTION,
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": _search_properties(),
+        "additionalProperties": False,
+    },
+}
 
 
 PRODUCT_FACETS_TOOL: dict[str, Any] = {
@@ -179,29 +202,105 @@ PRODUCT_FACETS_TOOL: dict[str, Any] = {
     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
 }
 
-LIST_INVOICES_TOOL: dict[str, Any] = {
-    "name": LIST_INVOICES,
-    "description": LIST_INVOICES_DESCRIPTION,
-    "strict": True,
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "page": {
-                "type": "integer",
-                "default": ListInvoicesInput.model_fields["page"].default,
-                "description": f"1-based page number, 1-{MAX_PAGE:,}.",
-            },
-            "page_size": {
-                "type": "integer",
-                "default": ListInvoicesInput.model_fields["page_size"].default,
-                "description": f"Invoices per page, 1-{MAX_TOOL_PAGE_SIZE}.",
-            },
+def _invoice_filter_properties() -> dict[str, Any]:
+    return {
+        "posted_from": {
+            "type": "string",
+            "format": "date",
+            "description": "First posting date to include, YYYY-MM-DD.",
         },
-        "additionalProperties": False,
-    },
+        "posted_to": {
+            "type": "string",
+            "format": "date",
+            "description": "Last posting date to include, YYYY-MM-DD, not before posted_from.",
+        },
+        "customer": {
+            "type": "string",
+            "description": (
+                f"Customer number (exact) or part of the customer name (any case), at most {MAX_TEXT_LENGTH} characters. "
+                "Names vary between invoices of the same customer, so a name part can match several customer numbers."
+            ),
+        },
+        "currency": {
+            "type": "string",
+            "description": "Invoice currency as a 3-letter ISO code, e.g. USD or CAD.",
+        },
+        "status": {
+            "type": "string",
+            "enum": [member.value for member in InvoiceStatus],
+            "description": "open = not paid yet, cleared = paid, overdue = not paid and due before as_of.",
+        },
+        "min_amount": {
+            "type": "number",
+            "description": f"Minimum invoice amount in the invoice currency, 0-{MAX_AMOUNT:,.0f}.",
+        },
+        "max_amount": {
+            "type": "number",
+            "description": f"Maximum invoice amount in the invoice currency, 0-{MAX_AMOUNT:,.0f}, not below min_amount.",
+        },
+        "as_of": {
+            "type": "string",
+            "format": "date",
+            "description": "Reference date for overdue, YYYY-MM-DD. Defaults to today; set it only when the user names a date.",
+        },
+    }
+
+
+def _list_invoices_properties() -> dict[str, Any]:
+    fields = ListInvoicesInput.model_fields
+    return _invoice_filter_properties() | {
+        "sort_by": {
+            "type": "string",
+            "enum": [member.value for member in InvoiceSortField],
+            "default": fields["sort_by"].default.value,
+            "description": "posting_date or amount (the invoice amount).",
+        },
+        "sort_order": {
+            "type": "string",
+            "enum": [member.value for member in SortOrder],
+            "default": fields["sort_order"].default.value,
+            "description": "desc for newest or largest first.",
+        },
+        "page": {
+            "type": "integer",
+            "default": fields["page"].default,
+            "description": f"1-based page number, 1-{MAX_PAGE:,}. Request another page only when the user wants more.",
+        },
+        "page_size": {
+            "type": "integer",
+            "default": fields["page_size"].default,
+            "description": f"Invoices per page, 1-{MAX_TOOL_PAGE_SIZE}.",
+        },
+    }
+
+
+def _analyze_invoices_properties() -> dict[str, Any]:
+    return _invoice_filter_properties() | {
+        "group_by": {
+            "type": "string",
+            "enum": [member.value for member in GroupBy],
+            "description": "Omit for totals per currency.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": f"Rows per currency, 1-{MAX_ANALYTICS_ROWS}. Set it for top-N requests.",
+        },
+    }
+
+
+def _invoice_tool(name: str, description: str, properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": description,
+        "input_schema": {"type": "object", "properties": properties, "additionalProperties": False},
+    }
+
+
+LIST_INVOICES_TOOL = _invoice_tool(LIST_INVOICES, LIST_INVOICES_DESCRIPTION, _list_invoices_properties())
+ANALYZE_INVOICES_TOOL = _invoice_tool(ANALYZE_INVOICES, ANALYZE_INVOICES_DESCRIPTION, _analyze_invoices_properties())
+
+
+TOOLS: Mapping[AssistantName, list[dict[str, Any]]] = {
+    AssistantName.ADVISOR: [PRODUCT_FACETS_TOOL, SEARCH_PRODUCTS_TOOL],
+    AssistantName.ANALYST: [ANALYZE_INVOICES_TOOL, LIST_INVOICES_TOOL],
 }
-
-
-def build_tools(db: Database) -> list[dict[str, Any]]:
-    vocabularies = vocab.get_all_vocabularies(db["products"])
-    return [PRODUCT_FACETS_TOOL, LIST_INVOICES_TOOL, build_search_products_tool(vocabularies)]

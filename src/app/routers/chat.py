@@ -11,7 +11,8 @@ from pymongo.database import Database
 
 from app.assistant.chat import Answer, ChatError, TextDelta, ToolCall, TraceStep, get_client, run_turn
 from app.assistant.memory import ConversationStore, get_store
-from app.assistant.tools import build_tools
+from app.assistant.profiles import PROFILES, AssistantName
+from app.assistant.tools import TOOLS
 from app.assistant.usage import record_usage
 from app.db import get_database
 from app.limits import MAX_CHAT_MESSAGE_LENGTH
@@ -27,6 +28,7 @@ class ChatRequest(BaseModel):
 
     conversation_id: str | None = Field(None, max_length=64)
     message: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
+    assistant: AssistantName = AssistantName.ADVISOR
 
 
 def assistant_client() -> anthropic.Anthropic:
@@ -38,13 +40,17 @@ def assistant_client() -> anthropic.Anthropic:
     return get_client()
 
 
-def chat_tools(db: Database = Depends(get_database)) -> list[dict[str, Any]]:
-    return build_tools(db)
+def chat_store(body: ChatRequest) -> ConversationStore:
+    return get_store(body.assistant)
+
+
+def chat_tools(body: ChatRequest) -> list[dict[str, Any]]:
+    return TOOLS[body.assistant]
 
 
 def resolve_conversation(
     body: ChatRequest,
-    store: ConversationStore = Depends(get_store),
+    store: ConversationStore = Depends(chat_store),
 ) -> tuple[str, list[dict[str, Any]]]:
     conversation_id = body.conversation_id or store.create()
     history = store.history(conversation_id)
@@ -60,14 +66,15 @@ def chat(
     conversation: tuple[str, list[dict[str, Any]]] = Depends(resolve_conversation),
     tools: list[dict[str, Any]] = Depends(chat_tools),
     db: Database = Depends(get_database),
-    store: ConversationStore = Depends(get_store),
+    store: ConversationStore = Depends(chat_store),
 ) -> Iterator[ServerSentEvent]:
+    profile = PROFILES[body.assistant]
     conversation_id, history = conversation
     yield ServerSentEvent(event="conversation", data={"conversation_id": conversation_id})
     steps: list[TraceStep] = []
     outcome = "closed"
     try:
-        for event in run_turn(client, db, tools, history, body.message, steps):
+        for event in run_turn(client, db, profile, tools, history, body.message, steps):
             if isinstance(event, TextDelta):
                 yield ServerSentEvent(event="text", data={"text": event.text})
             elif isinstance(event, ToolCall):
@@ -86,4 +93,4 @@ def chat(
         outcome = error.code
         yield ServerSentEvent(event="error", data={"code": error.code, "message": error.message})
     finally:
-        record_usage(db, conversation_id, steps, outcome)
+        record_usage(db, conversation_id, profile, steps, outcome)

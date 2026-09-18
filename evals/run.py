@@ -4,7 +4,7 @@ import os
 import sys
 import time
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.assistant import chat  # noqa: E402
 from app.assistant.dispatch import run_tool  # noqa: E402
-from app.assistant.tools import build_tools  # noqa: E402
+from app.assistant.profiles import PROFILES, Profile  # noqa: E402
+from app.assistant.tools import TOOLS  # noqa: E402
 from app.assistant.usage import cost_usd, total_tokens  # noqa: E402
 from app.config import API_KEY  # noqa: E402
 from app.db import get_database  # noqa: E402
@@ -40,12 +41,15 @@ class Recorder:
             raise
         return call["output"]
 
-    def record_usage(self, db: Any, conversation_id: str, steps: list[chat.TraceStep], outcome: str) -> None:
+    def record_usage(
+        self, db: Any, conversation_id: str, profile: Profile, steps: list[chat.TraceStep], outcome: str
+    ) -> None:
         self.steps.extend(steps)
 
 
-def first_call(case: Case, recorder: Recorder, db: Any, tools: list[dict[str, Any]]) -> tuple[str, list[str]]:
-    generator = chat._stream_once(chat.get_client(), tools, [{"role": "user", "content": case.turns[0]}], False, recorder.steps)
+def first_call(case: Case, recorder: Recorder, db: Any) -> tuple[str, list[str]]:
+    request = chat.build_request(PROFILES[case.assistant], TOOLS[case.assistant], date.today())
+    generator = chat._stream_once(chat.get_client(), request, [{"role": "user", "content": case.turns[0]}], False, recorder.steps)
     try:
         while True:
             next(generator)
@@ -67,7 +71,8 @@ def full_flow(case: Case, recorder: Recorder, http: TestClient) -> tuple[str, li
     conversation_id, events = None, []
     for question in case.turns:
         recorder.calls.clear()
-        response = http.post("/chat", json={"message": question, "conversation_id": conversation_id}, headers={"X-API-Key": API_KEY})
+        body = {"message": question, "conversation_id": conversation_id, "assistant": case.assistant}
+        response = http.post("/chat", json=body, headers={"X-API-Key": API_KEY})
         events = parse_sse(response.text) if response.status_code == 200 else [("error", {"status": response.status_code})]
         conversation_id = next((data["conversation_id"] for name, data in events if name == "conversation"), conversation_id)
         if events[-1][0] != "done":
@@ -75,11 +80,11 @@ def full_flow(case: Case, recorder: Recorder, http: TestClient) -> tuple[str, li
     return "".join(data["text"] for name, data in events if name == "text"), []
 
 
-def run_case(level: str, case: Case, db: Any, catalog: dict[str, Any], http: TestClient, tools: list[dict[str, Any]]) -> dict[str, Any]:
+def run_case(level: str, case: Case, db: Any, catalog: dict[str, Any], http: TestClient) -> dict[str, Any]:
     recorder = Recorder()
     chat.run_tool, chat_router.record_usage = recorder.run_tool, recorder.record_usage
     started_at = time.perf_counter()
-    answer, failures = first_call(case, recorder, db, tools) if level == "functional" else full_flow(case, recorder, http)
+    answer, failures = first_call(case, recorder, db) if level == "functional" else full_flow(case, recorder, http)
     failures += grade(case, db, catalog, answer, recorder.calls, final=level == "e2e")
     tokens = total_tokens(recorder.steps)
     return {
@@ -90,7 +95,7 @@ def run_case(level: str, case: Case, db: Any, catalog: dict[str, Any], http: Tes
         "latency_ms": round((time.perf_counter() - started_at) * 1000),
         "model_calls": sum(step.name == "model.call" for step in recorder.steps),
         "tokens": tokens,
-        "cost_usd": cost_usd(tokens),
+        "cost_usd": cost_usd(tokens, PROFILES[case.assistant].model),
         "answer": answer,
         "tool_calls": [{key: value for key, value in call.items() if key != "output"} for call in recorder.calls],
         "trace": chat.format_trace(level, " | ".join(case.turns), recorder.steps, "passed" if not failures else "failed"),
@@ -118,14 +123,14 @@ def main() -> int:
 
     db = get_database()
     catalog = {doc["_id"]: doc for doc in db["products"].find({}, {"listPrice": 1, "category": 1})}
-    tools, http = build_tools(db), TestClient(app)
+    http = TestClient(app)
     levels = ("functional", "e2e") if args.level == "all" else (args.level,)
     results = []
     for level in levels:
         for case in CASES:
             if (args.case and case.id not in args.case) or (level == "functional" and len(case.turns) > 1):
                 continue
-            result = run_case(level, case, db, catalog, http, tools)
+            result = run_case(level, case, db, catalog, http)
             results.append(result)
             print(
                 f"{level:<11} {'PASS' if result['passed'] else 'FAIL'}  {case.id:<24} {result['model_calls']} calls  "

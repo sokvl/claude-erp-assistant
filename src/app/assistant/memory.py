@@ -3,6 +3,7 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
+from app.assistant.profiles import AssistantName
 from app.limits import MAX_CONVERSATION_TURNS, MAX_CONVERSATIONS
 
 MAX_MESSAGES = 2 * MAX_CONVERSATION_TURNS
@@ -43,8 +44,8 @@ class ConversationStore:
             return True
 
 
-store = ConversationStore()
+stores = {assistant: ConversationStore() for assistant in AssistantName}
 
 
-def get_store() -> ConversationStore:
-    return store
+def get_store(assistant: AssistantName) -> ConversationStore:
+    return stores[assistant]

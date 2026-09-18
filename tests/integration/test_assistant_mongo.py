@@ -4,8 +4,9 @@ from datetime import datetime
 import pytest
 
 from app.assistant.chat import TraceStep
-from app.assistant.dispatch import HIDDEN_PRODUCT_FIELDS, ToolInputError, run_tool
-from app.assistant.tools import SearchProductsInput, build_tools
+from app.assistant.dispatch import HIDDEN_PRODUCT_FIELDS, run_tool
+from app.assistant.profiles import ADVISOR
+from app.assistant.tools import SearchProductsInput
 from app.assistant.usage import USAGE_COLLECTION, record_usage
 from app.catalog import vocab
 from app.catalog.service import search_catalog
@@ -44,18 +45,6 @@ def _json_roundtrip(value):
     return json.loads(json.dumps(value, default=str))
 
 
-@pytest.mark.parametrize("param", list(vocab.VOCAB_FIELDS), ids=list(vocab.VOCAB_FIELDS))
-def test_build_tools_enums_match_distinct_values_in_the_catalog(db, param):
-    # Arrange
-    expected = sorted(db["products"].distinct(vocab.VOCAB_FIELDS[param]))
-
-    # Act
-    properties = build_tools(db)[2]["input_schema"]["properties"]
-
-    # Assert
-    assert properties[param].get("items", properties[param])["enum"] == expected
-
-
 @pytest.mark.parametrize(
     ("tool_input", "expected_count"),
     [
@@ -92,7 +81,7 @@ def test_run_tool_search_products_never_exposes_internal_fields(db):
 
 def test_run_tool_list_invoices_returns_only_projected_fields(db):
     # Arrange / Act
-    items = json.loads(run_tool(db, "list_invoices", {"page_size": 3}))["items"]
+    items = json.loads(run_tool(db, "list_invoices", {"page_size": 3, "sort_order": "asc"}))["items"]
 
     # Assert
     assert [(sorted(item), sorted(item["dates"]), item["amounts"]) for item in items] == [
@@ -116,15 +105,6 @@ def test_run_tool_get_product_facets_matches_live_vocabularies(db):
     assert result == expected
 
 
-def test_run_tool_value_missing_from_live_catalog_raises_tool_input_error(db):
-    # Arrange / Act
-    with pytest.raises(ToolInputError) as raised:
-        run_tool(db, "search_products", {"architecture": "Blackwell"})
-
-    # Assert
-    assert "Unknown architecture: 'Blackwell'" in str(raised.value)
-
-
 def test_recordUsage_realMongo_storesQueryableDocument(db):
     # Arrange
     steps = [TraceStep("model.call", "ok", 10, "stop=end_turn", {
@@ -132,7 +112,7 @@ def test_recordUsage_realMongo_storesQueryableDocument(db):
     })]
 
     # Act
-    record_usage(db, "conv-usage", steps, "done")
+    record_usage(db, "conv-usage", ADVISOR, steps, "done")
 
     # Assert
     stored = db[USAGE_COLLECTION].find_one({"conversationId": "conv-usage"}, {"_id": 0, "createdAt": 0})

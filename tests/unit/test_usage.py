@@ -3,8 +3,9 @@ import logging
 import pytest
 from pymongo.errors import ServerSelectionTimeoutError
 
-from app.assistant.chat import MODEL, TraceStep
-from app.assistant.usage import USAGE_COLLECTION, cost_usd, record_usage, total_tokens
+from app.assistant.chat import TraceStep
+from app.assistant.profiles import ADVISOR, ADVISOR_MODEL, ANALYST, ANALYST_MODEL, PROFILES
+from app.assistant.usage import PRICE_PER_MILLION_TOKENS, USAGE_COLLECTION, cost_usd, record_usage, total_tokens
 
 ZERO = {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
 
@@ -52,20 +53,26 @@ def test_totalTokens_steps_sumsOnlyModelUsage(steps, expected):
 
 
 @pytest.mark.parametrize(
-    ("tokens", "expected"),
+    ("model", "tokens", "expected"),
     [
-        (ZERO, 0.0),
-        ({**ZERO, "input_tokens": 1_000_000}, 1.00),
-        ({**ZERO, "output_tokens": 1_000_000}, 5.00),
-        ({**ZERO, "cache_creation_input_tokens": 1_000_000}, 1.25),
-        ({**ZERO, "cache_read_input_tokens": 1_000_000}, 0.10),
-        ({"input_tokens": 3574, "output_tokens": 115, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, 0.004149),
+        (ADVISOR_MODEL, ZERO, 0.0),
+        (ADVISOR_MODEL, {**ZERO, "input_tokens": 1_000_000}, 1.00),
+        (ADVISOR_MODEL, {**ZERO, "output_tokens": 1_000_000}, 5.00),
+        (ADVISOR_MODEL, {**ZERO, "cache_creation_input_tokens": 1_000_000}, 1.25),
+        (ADVISOR_MODEL, {**ZERO, "cache_read_input_tokens": 1_000_000}, 0.10),
+        (ADVISOR_MODEL, {"input_tokens": 3574, "output_tokens": 115, "cache_creation_input_tokens": 0,
+                         "cache_read_input_tokens": 0}, 0.004149),
+        (ANALYST_MODEL, {**ZERO, "input_tokens": 1_000_000}, 2.00),
+        (ANALYST_MODEL, {**ZERO, "output_tokens": 1_000_000}, 10.00),
+        (ANALYST_MODEL, {**ZERO, "cache_creation_input_tokens": 1_000_000}, 2.50),
+        (ANALYST_MODEL, {**ZERO, "cache_read_input_tokens": 1_000_000}, 0.20),
     ],
-    ids=["nothing", "input", "output", "cache_write", "cache_read", "typical_call"],
+    ids=["advisor_nothing", "advisor_input", "advisor_output", "advisor_cache_write", "advisor_cache_read",
+         "advisor_typical_call", "analyst_input", "analyst_output", "analyst_cache_write", "analyst_cache_read"],
 )
-def test_costUsd_tokens_appliesModelPrices(tokens, expected):
+def test_costUsd_tokens_appliesModelPrices(model, tokens, expected):
     # Arrange / Act
-    result = cost_usd(tokens, MODEL)
+    result = cost_usd(tokens, model)
 
     # Assert
     assert result == pytest.approx(expected)
@@ -77,13 +84,14 @@ def test_recordUsage_turn_insertsTotalsAndCost():
     steps = [_call(1000, 100), TraceStep("tool search_products", "ok", 1, "10 chars"), _call(2000, 200)]
 
     # Act
-    record_usage({USAGE_COLLECTION: collection}, "conv-1", steps, "done")
+    record_usage({USAGE_COLLECTION: collection}, "conv-1", ADVISOR, steps, "done")
 
     # Assert
     [document] = collection.documents
     assert {key: value for key, value in document.items() if key != "createdAt"} == {
         "conversationId": "conv-1",
-        "model": MODEL,
+        "assistant": "advisor",
+        "model": ADVISOR_MODEL,
         "outcome": "done",
         "modelCalls": 2,
         "tokens": {**ZERO, "input_tokens": 3000, "output_tokens": 300},
@@ -97,7 +105,32 @@ def test_recordUsage_databaseDown_logsInsteadOfRaising(caplog):
 
     # Act
     with caplog.at_level(logging.ERROR, logger="app.assistant.usage"):
-        record_usage({USAGE_COLLECTION: collection}, "conv-1", [_call(10, 1)], "done")
+        record_usage({USAGE_COLLECTION: collection}, "conv-1", ADVISOR, [_call(10, 1)], "done")
 
     # Assert
     assert "could not record token usage for conversation conv-1" in caplog.text
+
+
+@pytest.mark.parametrize("assistant", list(PROFILES), ids=list(PROFILES))
+def test_priceTable_everyProfileModel_hasPrices(assistant):
+    # Arrange: record_usage runs in the router's finally block, so a missing row would raise there
+    model = PROFILES[assistant].model
+
+    # Act / Assert
+    assert set(PRICE_PER_MILLION_TOKENS[model]) == set(ZERO)
+
+
+def test_recordUsage_analystTurn_storesAnalystModelAndItsCost():
+    # Arrange
+    collection = Collection()
+
+    # Act
+    record_usage({USAGE_COLLECTION: collection}, "conv-2", ANALYST, [_call(1_000_000, 100_000)], "done")
+
+    # Assert
+    [document] = collection.documents
+    assert (document["assistant"], document["model"], document["costUsd"]) == (
+        "analyst",
+        ANALYST_MODEL,
+        pytest.approx(3.00),
+    )

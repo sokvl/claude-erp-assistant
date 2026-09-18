@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from pymongo.database import Database
 
 from app.assistant.tools import (
+    ANALYZE_INVOICES,
     GET_PRODUCT_FACETS,
     LIST_INVOICES,
     SEARCH_PRODUCTS,
@@ -14,21 +15,10 @@ from app.assistant.tools import (
 )
 from app.catalog import vocab
 from app.catalog.service import search_catalog
-from app.pagination import paginate
+from app.invoices.schemas import InvoiceAnalyticsParams
+from app.invoices.service import analyze_invoices, list_invoices
 
 HIDDEN_PRODUCT_FIELDS = frozenset({"_id", "tier"})
-
-INVOICE_PROJECTION = {
-    "_id": 0,
-    "invoiceId": 1,
-    "customer": 1,
-    "currency": 1,
-    "amounts.totalOpen": 1,
-    "isOpen": 1,
-    "dates.postingDate": 1,
-    "dates.dueInDate": 1,
-    "dates.clearDate": 1,
-}
 
 
 logger = logging.getLogger(__name__)
@@ -44,8 +34,6 @@ def run_tool(db: Database, name: str, tool_input: Any) -> str:
         result = _dispatch(db, name, tool_input)
     except ValidationError as exc:
         raise ToolInputError(_describe(exc)) from exc
-    except vocab.UnknownVocabularyValue as exc:
-        raise ToolInputError(f"{exc}. Call get_product_facets for allowed values.") from exc
     content = json.dumps(result, default=str, separators=(",", ":"), ensure_ascii=False)
     logger.debug("tool %s returned %s", name, content)
     return content
@@ -63,8 +51,9 @@ def _dispatch(db: Database, name: str, tool_input: Any) -> Any:
     if name == GET_PRODUCT_FACETS:
         return vocab.get_all_vocabularies(db["products"])
     if name == LIST_INVOICES:
-        params = ListInvoicesInput.model_validate(tool_input)
-        return paginate(db["invoices"], params.page, params.page_size, INVOICE_PROJECTION)
+        return list_invoices(db["invoices"], ListInvoicesInput.model_validate(tool_input))
+    if name == ANALYZE_INVOICES:
+        return analyze_invoices(db["invoices"], InvoiceAnalyticsParams.model_validate(tool_input))
     raise ToolInputError(f"Unknown tool: {name}")
 
 

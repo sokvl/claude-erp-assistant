@@ -74,16 +74,16 @@
     margin-right: auto; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
     font-size: 0.85rem; color: var(--accent-2);
   }
-  input, textarea, button {
+  input, textarea, button, select {
     font: inherit; color: var(--text); background: var(--panel-strong);
     border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px;
     transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
   }
   @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    input, textarea, button { backdrop-filter: var(--blur-field); -webkit-backdrop-filter: var(--blur-field); }
+    input, textarea, button, select { backdrop-filter: var(--blur-field); -webkit-backdrop-filter: var(--blur-field); }
   }
   input::placeholder, textarea::placeholder { color: var(--muted); }
-  input:focus, textarea:focus {
+  input:focus, textarea:focus, select:focus {
     outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(143, 166, 194, 0.18);
   }
@@ -182,6 +182,10 @@
   </div>
   <header>
     <strong>Store Assistant</strong>
+    <select id="assistant" aria-label="Assistant">
+      <option value="advisor">Product advisor</option>
+      <option value="analyst">Invoice analyst</option>
+    </select>
     <input id="key" type="password" placeholder="X-API-Key" autocomplete="off">
     <button id="reset" type="button">New conversation</button>
   </header>
@@ -206,13 +210,24 @@
   const input = document.getElementById("input");
   const send = document.getElementById("send");
   const keyInput = document.getElementById("key");
+  const assistantSelect = document.getElementById("assistant");
   let conversationId = null;
 
-  const suggestions = [
-    'Customer wants to fine-tune a 13B model, budget $2k.',
-    'What do we have in stock from NVIDIA?',
-    'Can you examine our revenue from last month?',
-  ];
+  const suggestionsByAssistant = {
+    advisor: [
+      'Customer wants to fine-tune a 13B model, budget $2k.',
+      'What do we have in stock from NVIDIA?',
+    ],
+    analyst: [
+      'Who were our top 5 customers in Q1 2020?',
+      'How much was overdue on 2020-05-31?',
+      'Revenue by product category per quarter in 2019.',
+    ],
+  };
+  const placeholders = {
+    advisor: "Type the customer's question. Enter to send, Shift+Enter for a new line.",
+    analyst: "Ask about invoices, revenue or payments. Enter to send, Shift+Enter for a new line.",
+  };
   let typewriterTimer = null;
 
   function renderSuggestions() {
@@ -224,6 +239,8 @@
 
     let sIndex = 0, cIndex = 0, deleting = false;
     const typewriterEl = el.querySelector("#typewriter");
+
+    const suggestions = suggestionsByAssistant[assistantSelect.value];
 
     function tick() {
       const current = suggestions[sIndex];
@@ -255,12 +272,19 @@
 
   renderSuggestions();
 
-  document.getElementById("reset").addEventListener("click", () => {
+  function startConversation(note) {
     conversationId = null;
     stopSuggestions();
     log.innerHTML = "";
-    addNote("New conversation started.");
+    addNote(note);
     renderSuggestions();
+  }
+
+  document.getElementById("reset").addEventListener("click", () => startConversation("New conversation started."));
+
+  assistantSelect.addEventListener("change", () => {
+    input.placeholder = placeholders[assistantSelect.value];
+    startConversation(`New conversation with the ${assistantSelect.selectedOptions[0].text.toLowerCase()}.`);
   });
 
   input.addEventListener("keydown", (e) => {
@@ -304,7 +328,7 @@
       const response = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": keyInput.value },
-        body: JSON.stringify({ conversation_id: conversationId, message }),
+        body: JSON.stringify({ conversation_id: conversationId, message, assistant: assistantSelect.value }),
       });
       if (!response.ok) {
         stopThinking();
