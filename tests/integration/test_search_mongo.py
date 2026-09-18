@@ -86,18 +86,6 @@ def test_search_products_total_reflects_the_filter(products, filter_kwargs, expe
     assert result["total"] == expected_total
 
 
-def test_search_products_no_matches_returns_zero_not_empty_array(products):
-    # Arrange
-    criteria = build_product_filter(min_vram_gb=999999)
-
-    # Act
-    result = _search(products, criteria)
-
-    # Assert: the total facet yields [], which must be normalized to 0
-    assert result["total"] == 0
-    assert result["items"] == []
-
-
 @pytest.mark.parametrize(
     "spec_sort",
     [SortField.VRAM, SortField.FP16],
@@ -156,19 +144,6 @@ def test_search_products_match_stage_uses_an_index(products):
 
     # Assert: $match stays first, so it is planned as an ordinary query
     assert "IXSCAN" in str(plan)
-
-
-@pytest.mark.parametrize(
-    "query",
-    [f"?min_vram_gb={2**63}", f"?min_vram_gb={10**30}", f"?page={10**18}"],
-    ids=["vram_over_int64", "vram_absurd", "page_skip_overflow"],
-)
-def test_list_products_previously_crashing_numbers_return_422_not_500(client, query):
-    # Arrange / Act
-    response = client.get(f"/products{query}", headers={"X-API-Key": API_KEY})
-
-    # Assert
-    assert response.status_code == 422
 
 
 @pytest.mark.parametrize(

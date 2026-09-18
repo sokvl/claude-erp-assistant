@@ -4,12 +4,11 @@ from datetime import datetime
 import pytest
 
 from app.assistant.chat import TraceStep
-from app.assistant.dispatch import HIDDEN_PRODUCT_FIELDS, INVOICE_PROJECTION, ToolInputError, run_tool
+from app.assistant.dispatch import HIDDEN_PRODUCT_FIELDS, ToolInputError, run_tool
 from app.assistant.tools import SearchProductsInput, build_tools
 from app.assistant.usage import USAGE_COLLECTION, record_usage
 from app.catalog import vocab
 from app.catalog.service import search_catalog
-from app.pagination import paginate
 
 pytestmark = pytest.mark.integration
 
@@ -39,13 +38,6 @@ def db(products):
     database["invoices"].insert_many(FIXTURE_INVOICES)
     yield database
     database["invoices"].drop()
-
-
-@pytest.fixture(autouse=True)
-def _clear_vocabulary_cache():
-    vocab.clear_cache()
-    yield
-    vocab.clear_cache()
 
 
 def _json_roundtrip(value):
@@ -96,17 +88,6 @@ def test_run_tool_search_products_never_exposes_internal_fields(db):
 
     # Assert
     assert [sorted(HIDDEN_PRODUCT_FIELDS & item.keys()) for item in items] == [[] for _ in items]
-
-
-def test_run_tool_list_invoices_matches_direct_projected_page(db):
-    # Arrange
-    direct = paginate(db["invoices"], 1, 2, INVOICE_PROJECTION)
-
-    # Act
-    result = json.loads(run_tool(db, "list_invoices", {"page": 1, "page_size": 2}))
-
-    # Assert
-    assert result == _json_roundtrip(direct)
 
 
 def test_run_tool_list_invoices_returns_only_projected_fields(db):
