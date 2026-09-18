@@ -30,12 +30,10 @@ def search_products(
 
 
 def search_catalog(collection: Any, params: ProductSearchParams) -> dict[str, Any]:
-    for param in ("category", "brand", "architecture", "memory_type"):
+    for param in vocab.VOCAB_FIELDS:
         value = getattr(params, param)
         if value:
-            vocab.check_vocabulary(collection, param, [value])
-    if params.use_case:
-        vocab.check_vocabulary(collection, "use_case", params.use_case)
+            vocab.check_vocabulary(collection, param, value if isinstance(value, list) else [value])
 
     criteria = build_product_filter(
         category=params.category,
