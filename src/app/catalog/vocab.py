@@ -1,5 +1,4 @@
-import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 VOCAB_FIELDS: Mapping[str, str] = {
@@ -10,43 +9,6 @@ VOCAB_FIELDS: Mapping[str, str] = {
     "use_case": "specs.useCases",
 }
 
-TTL_SECONDS = 300
-
-_cache: dict[str, tuple[frozenset[str], float]] = {}
-
-
-def get_vocabulary(collection: Any, param: str) -> frozenset[str]:
-    """Allowed values for a filter param, cached - advanced search is expected to be hot."""
-    if param not in VOCAB_FIELDS:
-        raise KeyError(f"{param!r} is not a vocabulary field")
-
-    cached = _cache.get(param)
-    now = time.monotonic()
-    if cached is not None and cached[1] > now:
-        return cached[0]
-
-    values = frozenset(collection.distinct(VOCAB_FIELDS[param]))
-    _cache[param] = (values, now + TTL_SECONDS)
-    return values
-
 
 def get_all_vocabularies(collection: Any) -> dict[str, list[str]]:
-    return {param: sorted(get_vocabulary(collection, param)) for param in VOCAB_FIELDS}
-
-
-def clear_cache() -> None:
-    _cache.clear()
-
-
-class UnknownVocabularyValue(ValueError):
-    def __init__(self, param: str, value: str) -> None:
-        super().__init__(f"Unknown {param}: {value!r}")
-        self.param = param
-        self.value = value
-
-
-def check_vocabulary(collection: Any, param: str, values: Iterable[str]) -> None:
-    allowed = get_vocabulary(collection, param)
-    for value in values:
-        if value not in allowed:
-            raise UnknownVocabularyValue(param, value)
+    return {param: sorted(collection.distinct(path)) for param, path in VOCAB_FIELDS.items()}

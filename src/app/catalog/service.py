@@ -1,6 +1,5 @@
 from typing import Any
 
-from app.catalog import vocab
 from app.catalog.enums import SortField, SortOrder
 from app.catalog.query import build_product_filter, build_search_pipeline
 from app.catalog.schemas import ProductSearchParams
@@ -30,11 +29,6 @@ def search_products(
 
 
 def search_catalog(collection: Any, params: ProductSearchParams) -> dict[str, Any]:
-    for param in vocab.VOCAB_FIELDS:
-        value = getattr(params, param)
-        if value:
-            vocab.check_vocabulary(collection, param, value if isinstance(value, list) else [value])
-
     criteria = build_product_filter(
         category=params.category,
         brand=params.brand,

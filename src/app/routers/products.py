@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from pymongo.database import Database
 
 from app.catalog import vocab
@@ -22,10 +22,4 @@ def list_products(
     params: Annotated[ProductSearchParams, Query()],
     db: Database = Depends(get_database),
 ):
-    try:
-        return search_catalog(db["products"], params)
-    except vocab.UnknownVocabularyValue as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"{exc}. See /products/facets for allowed values.",
-        ) from exc
+    return search_catalog(db["products"], params)
