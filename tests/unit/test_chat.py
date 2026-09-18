@@ -112,6 +112,13 @@ def _run(client, history=()):
     return list(run_turn(client, None, [], list(history), "question"))
 
 
+def _fail_tool(monkeypatch, error):
+    def failing_run_tool(db, name, tool_input):
+        raise error
+
+    monkeypatch.setattr(chat, "run_tool", failing_run_tool)
+
+
 @pytest.fixture(autouse=True)
 def sleeps(monkeypatch):
     recorded = []
@@ -340,10 +347,7 @@ def test_run_turn_failure_that_is_not_retried_never_sleeps(sleeps, stream):
 
 def test_run_turn_database_error_in_tool_stops_without_another_model_call(monkeypatch):
     # Arrange
-    def failing_run_tool(db, name, tool_input):
-        raise ServerSelectionTimeoutError("connection refused")
-
-    monkeypatch.setattr(chat, "run_tool", failing_run_tool)
+    _fail_tool(monkeypatch, ServerSelectionTimeoutError("connection refused"))
     client = FakeClient(_tool_round(), _answer())
 
     # Act
@@ -366,10 +370,7 @@ def test_run_turn_database_error_in_tool_stops_without_another_model_call(monkey
 )
 def test_run_turn_tool_failure_returns_is_error_result_to_claude(monkeypatch, error, expected_content):
     # Arrange
-    def failing_run_tool(db, name, tool_input):
-        raise error
-
-    monkeypatch.setattr(chat, "run_tool", failing_run_tool)
+    _fail_tool(monkeypatch, error)
     client = FakeClient(_tool_round(), _answer())
 
     # Act
@@ -511,10 +512,7 @@ def _run_traced(client, steps):
 def test_run_turn_trace_records_each_step_with_its_status(monkeypatch, streams, tool_error, expected):
     # Arrange
     if tool_error is not None:
-        def failing_run_tool(db, name, tool_input):
-            raise tool_error
-
-        monkeypatch.setattr(chat, "run_tool", failing_run_tool)
+        _fail_tool(monkeypatch, tool_error)
     steps = []
 
     # Act
