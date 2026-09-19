@@ -184,9 +184,10 @@ def test_build_search_pipeline_sort_maps_field_and_appends_id_tiebreaker(
 @pytest.mark.parametrize(
     ("criteria", "sort_by", "expected"),
     [
-        # nulls sort lowest, so a spec sort without a guard leads with CPUs
-        ({}, SortField.VRAM, {"specs.vramGb": {"$ne": None}}),
-        ({}, SortField.FP16, {"specs.fp16TensorTflopsDense": {"$ne": None}}),
+        # nulls sort lowest, so a spec sort without a guard leads with CPUs; the guard names the type it keeps
+        # instead of negating null, since a negation cannot bound an index scan
+        ({}, SortField.VRAM, {"specs.vramGb": {"$type": "number"}}),
+        ({}, SortField.FP16, {"specs.fp16TensorTflopsDense": {"$type": "number"}}),
         # non-spec paths need no guard
         ({}, SortField.NAME, {}),
         ({}, SortField.PRICE, {}),
@@ -201,7 +202,7 @@ def test_build_search_pipeline_sort_maps_field_and_appends_id_tiebreaker(
         (
             {"category": "GPU"},
             SortField.VRAM,
-            {"category": "GPU", "specs.vramGb": {"$ne": None}},
+            {"category": "GPU", "specs.vramGb": {"$type": "number"}},
         ),
     ],
     ids=["vram_guarded", "fp16_guarded", "name_unguarded", "price_unguarded",

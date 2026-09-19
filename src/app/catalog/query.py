@@ -83,7 +83,7 @@ def build_search_pipeline(
     direction = 1 if order is SortOrder.ASC else -1
 
     if path.startswith("specs.") and path not in criteria:
-        criteria = {**criteria, path: {"$ne": None}}
+        criteria = {**criteria, path: {"$type": "number"}}
 
     return [
         {"$match": criteria},
