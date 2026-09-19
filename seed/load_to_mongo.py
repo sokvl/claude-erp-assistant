@@ -3,19 +3,24 @@
 Schema notes:
 - _id is the invoice's natural business key (invoice_id, falling back to
   doc_id for the handful of rows missing invoice_id). Using a stable
-  business key as _id makes re-runs idempotent (upsert) and gives a
-  future `invoice_items` collection a natural field to reference via
-  invoiceId, without needing an embedded/placeholder array today.
+  business key as _id makes re-runs idempotent (upsert); the upsert $sets
+  only these fields, so the `lines` array that generate_invoice_items.py
+  embeds survives a reload.
 - document_create_date and document_create_date.1 are kept as two
   separate fields (documentCreateDate / documentCreateDate1) - they
   differ in ~57% of rows in this dataset, so they are not duplicates.
+- area_business is empty in every row, so it is not stored.
+- customer.nameLower is the lowercased name, so a case-insensitive
+  customer search can be a left-anchored, index-bounded prefix match.
 """
 
 import argparse
 from datetime import datetime
 
 import pandas as pd
-from pymongo import ASCENDING, MongoClient, UpdateOne
+from pymongo import MongoClient, UpdateOne
+
+from indexes import INVOICE_INDEXES, sync_indexes
 
 
 def parse_yyyymmdd(series: pd.Series) -> pd.Series:
@@ -51,10 +56,10 @@ def row_to_document(row: pd.Series) -> dict:
         "invoiceId": str(row["invoice_id"]) if pd.notna(row["invoice_id"]) else None,
         "docId": str(row["doc_id"]),
         "businessCode": row["business_code"],
-        "areaBusiness": None if pd.isna(row["area_business"]) else row["area_business"],
         "customer": {
             "number": row["cust_number"],
             "name": row["name_customer"],
+            "nameLower": row["name_customer"].lower(),
         },
         "currency": row["invoice_currency"],
         "documentType": row["document type"],
@@ -76,13 +81,6 @@ def row_to_document(row: pd.Series) -> dict:
     }
 
 
-def ensure_indexes(collection):
-    collection.create_index([("customer.number", ASCENDING)])
-    collection.create_index([("isOpen", ASCENDING), ("dates.dueInDate", ASCENDING)])
-    collection.create_index([("dates.clearDate", ASCENDING)], sparse=True)
-    collection.create_index([("dates.postingDate", ASCENDING), ("_id", ASCENDING)])
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", default="seed/dataset.csv")
@@ -96,7 +94,7 @@ def main():
 
     client = MongoClient(args.uri)
     collection = client[args.db][args.collection]
-    ensure_indexes(collection)
+    sync_indexes(collection, INVOICE_INDEXES)
 
     start = datetime.now()
     total = 0

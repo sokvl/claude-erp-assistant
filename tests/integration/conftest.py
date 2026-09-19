@@ -8,7 +8,7 @@ from pymongo.errors import PyMongoError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "seed"))
 
-from generate_invoice_items import ensure_product_indexes  # noqa: E402
+from indexes import PRODUCT_INDEXES, sync_indexes  # noqa: E402
 
 URI = "mongodb://localhost:27017"
 
@@ -63,7 +63,7 @@ def products(mongo_client):
     db_name = f"test_catalog_{uuid4().hex[:8]}"
     collection = mongo_client[db_name]["products"]
     collection.insert_many(FIXTURE_PRODUCTS)
-    ensure_product_indexes(collection)
+    sync_indexes(collection, PRODUCT_INDEXES)
 
     yield collection
 

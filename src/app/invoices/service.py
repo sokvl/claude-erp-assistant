@@ -1,25 +1,24 @@
 from datetime import date
 from typing import Any
 
-from app.invoices.query import build_analytics_pipeline, build_invoice_filter, build_list_pipeline
+from app.invoices.query import build_analytics_pipeline, build_invoice_filter, build_list_query
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceListParams
 from app.limits import QUERY_TIMEOUT_MS
 
 
 def list_invoices(collection: Any, params: InvoiceListParams) -> dict[str, Any]:
-    pipeline = build_list_pipeline(
+    query = build_list_query(
         criteria=build_invoice_filter(params, params.as_of or date.today()),
         sort_by=params.sort_by,
         order=params.sort_order,
         page=params.page,
         page_size=params.page_size,
     )
-    result = next(iter(collection.aggregate(pipeline, maxTimeMS=QUERY_TIMEOUT_MS)), None) or {"items": [], "total": 0}
     return {
         "page": params.page,
         "pageSize": params.page_size,
-        "total": result["total"],
-        "items": result["items"],
+        "total": collection.count_documents(query["filter"], maxTimeMS=QUERY_TIMEOUT_MS),
+        "items": list(collection.find(**query, max_time_ms=QUERY_TIMEOUT_MS)),
     }
 
 

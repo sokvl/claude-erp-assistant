@@ -14,13 +14,18 @@ ROWS = [{"currency": "USD", "groupCount": 1, "rows": [{"key": "0200769623", "tot
 class FakeInvoices:
     def __init__(self):
         self.aggregate_calls = []
+        self.find_calls = []
 
     def aggregate(self, pipeline, **kwargs):
         self.aggregate_calls.append(pipeline)
-        if "$facet" in pipeline[2]:
-            return iter([{"items": [{"invoiceId": "1930438491", "dates": {"postingDate": datetime(2020, 1, 26)}}],
-                          "total": 1}])
         return iter(ROWS)
+
+    def find(self, **kwargs):
+        self.find_calls.append(kwargs)
+        return iter([{"invoiceId": "1930438491", "dates": {"postingDate": datetime(2020, 1, 26)}}])
+
+    def count_documents(self, criteria, **kwargs):
+        return 1
 
     def find_one(self, *args, **kwargs):
         return {"dates": {"postingDate": datetime(2019, 1, 2)}}
@@ -39,7 +44,7 @@ def client(invoices):
     return TestClient(app)
 
 
-def test_list_invoices_query_params_reach_the_pipeline(client, invoices):
+def test_list_invoices_query_params_reach_the_query(client, invoices):
     # Arrange
     query = "?posted_from=2020-01-01&posted_to=2020-01-31&currency=USD&status=open&sort_by=amount&sort_order=asc" \
             "&page=2&page_size=5"
@@ -48,15 +53,18 @@ def test_list_invoices_query_params_reach_the_pipeline(client, invoices):
     body = client.get(f"/invoices{query}", headers=AUTH).json()
 
     # Assert
-    [pipeline] = invoices.aggregate_calls
-    assert (pipeline[0], pipeline[1], pipeline[2]["$facet"]["items"][:2], body["total"]) == (
-        {"$match": {
-            "dates.postingDate": {"$gte": datetime(2020, 1, 1), "$lte": datetime(2020, 1, 31, 23, 59, 59, 999999)},
-            "currency": "USD",
-            "isOpen": True,
-        }},
-        {"$sort": {"amounts.totalOpen": 1, "_id": 1}},
-        [{"$skip": 5}, {"$limit": 5}],
+    [find] = invoices.find_calls
+    assert ((find["filter"], find["sort"], find["skip"], find["limit"]), body["total"]) == (
+        (
+            {
+                "dates.postingDate": {"$gte": datetime(2020, 1, 1), "$lte": datetime(2020, 1, 31, 23, 59, 59, 999999)},
+                "currency": "USD",
+                "isOpen": True,
+            },
+            [("amounts.totalOpen", 1), ("_id", 1)],
+            5,
+            5,
+        ),
         1,
     )
 
@@ -101,5 +109,5 @@ def test_invoice_endpoints_invalid_query_returns_422_without_querying(client, in
     response = client.get(path, headers=AUTH)
 
     # Assert
-    assert (response.status_code, invoices.aggregate_calls) == (422, [])
+    assert (response.status_code, invoices.aggregate_calls, invoices.find_calls) == (422, [], [])
 

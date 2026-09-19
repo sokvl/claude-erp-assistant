@@ -217,8 +217,9 @@ def _invoice_filter_properties() -> dict[str, Any]:
         "customer": {
             "type": "string",
             "description": (
-                f"Customer number (exact) or part of the customer name (any case), at most {MAX_TEXT_LENGTH} characters. "
-                "Names vary between invoices of the same customer, so a name part can match several customer numbers."
+                f"Customer number (exact) or the beginning of the customer name (any case), at most {MAX_TEXT_LENGTH} "
+                "characters. Names vary between invoices of the same customer, so a name beginning can match several "
+                "customer numbers."
             ),
         },
         "currency": {

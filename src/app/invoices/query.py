@@ -10,7 +10,8 @@ from app.limits import DEFAULT_ANALYTICS_ROWS, MAX_ANALYTICS_ROWS
 INVOICE_PROJECTION = {
     "_id": 0,
     "invoiceId": 1,
-    "customer": 1,
+    "customer.number": 1,
+    "customer.name": 1,
     "currency": 1,
     "amounts.totalOpen": 1,
     "isOpen": 1,
@@ -48,7 +49,7 @@ def build_invoice_filter(filters: InvoiceFilter, as_of: date) -> dict[str, Any]:
     if filters.customer:
         criteria["$or"] = [
             {"customer.number": filters.customer},
-            {"customer.name": {"$regex": re.escape(filters.customer), "$options": "i"}},
+            {"customer.nameLower": {"$regex": "^" + re.escape(filters.customer.lower())}},
         ]
     if filters.currency:
         criteria["currency"] = filters.currency
@@ -68,35 +69,27 @@ def build_invoice_filter(filters: InvoiceFilter, as_of: date) -> dict[str, Any]:
     return criteria
 
 
-def build_list_pipeline(
+def build_list_query(
     *,
     criteria: dict[str, Any],
     sort_by: InvoiceSortField,
     order: SortOrder,
     page: int,
     page_size: int,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     if not isinstance(sort_by, InvoiceSortField):
         raise ValueError(f"sort_by must be an InvoiceSortField, got {sort_by!r}")
     if not isinstance(order, SortOrder):
         raise ValueError(f"order must be a SortOrder, got {order!r}")
 
     direction = 1 if order is SortOrder.ASC else -1
-    return [
-        {"$match": criteria},
-        {"$sort": {SORT_PATHS[sort_by]: direction, "_id": direction}},
-        {
-            "$facet": {
-                "items": [
-                    {"$skip": (page - 1) * page_size},
-                    {"$limit": page_size},
-                    {"$project": INVOICE_PROJECTION},
-                ],
-                "total": [{"$count": "count"}],
-            }
-        },
-        {"$addFields": {"total": {"$ifNull": [{"$arrayElemAt": ["$total.count", 0]}, 0]}}},
-    ]
+    return {
+        "filter": criteria,
+        "projection": INVOICE_PROJECTION,
+        "sort": [(SORT_PATHS[sort_by], direction), ("_id", direction)],
+        "skip": (page - 1) * page_size,
+        "limit": page_size,
+    }
 
 
 def _invoice_facts(group_by: GroupBy | None) -> list[dict[str, Any]]:
@@ -126,15 +119,6 @@ def _invoice_facts(group_by: GroupBy | None) -> list[dict[str, Any]]:
 def _line_item_facts(group_by: GroupBy) -> list[dict[str, Any]]:
     field = LINE_ITEM_FIELDS[group_by]
     return [
-        {
-            "$lookup": {
-                "from": "invoice_items",
-                "localField": "_id",
-                "foreignField": "invoiceId",
-                "pipeline": [{"$project": {"_id": 0, field: 1, "productName": 1, "quantity": 1, "lineTotal": 1}}],
-                "as": "lines",
-            }
-        },
         {"$unwind": "$lines"},
         {
             "$group": {

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from load_to_mongo import ensure_indexes
+from indexes import INVOICE_INDEXES, sync_indexes
 
 from app.assistant.dispatch import run_tool
 from app.config import API_KEY
@@ -22,20 +22,32 @@ def _invoice(invoice_id, number, name, currency, total, posted, due, cleared=Non
     return {
         "_id": invoice_id,
         "invoiceId": invoice_id,
-        "customer": {"number": number, "name": name},
+        "customer": {"number": number, "name": name, "nameLower": name.lower()},
         "currency": currency,
         "amounts": {"totalOpen": total},
         "isOpen": cleared is None,
         "dates": {"postingDate": posted, "dueInDate": due, "clearDate": cleared},
+        "lines": LINES[invoice_id],
     }
 
 
-def _line(invoice_id, line_no, sku, name, brand, category, quantity, unit_price):
+def _line(line_no, sku, name, brand, category, quantity, unit_price):
     return {
-        "_id": f"{invoice_id}-{line_no}", "invoiceId": invoice_id, "lineNo": line_no, "sku": sku,
-        "productName": name, "brand": brand, "category": category,
+        "lineNo": line_no, "sku": sku, "productName": name, "brand": brand, "category": category,
         "quantity": quantity, "unitPrice": unit_price, "lineTotal": quantity * unit_price,
     }
+
+
+# Lines add up to their invoice totals. U3 has two GPU lines, so it must count as one GPU invoice.
+LINES = {
+    "U1": [_line(1, "GPU-A", "GPU A", "NVIDIA", "GPU", 2, 400.0), _line(2, "RAM-B", "RAM B", "Corsair", "RAM", 4, 50.0)],
+    "U2": [_line(1, "GPU-A", "GPU A", "NVIDIA", "GPU", 1, 500.0)],
+    "U3": [_line(1, "GPU-A", "GPU A", "NVIDIA", "GPU", 2, 400.0), _line(2, "GPU-D", "GPU D", "NVIDIA", "GPU", 3, 400.0)],
+    "U4": [_line(1, "RAM-B", "RAM B", "Corsair", "RAM", 6, 50.0)],
+    "U5": [_line(1, "CPU-C", "CPU C", "AMD", "CPU", 3, 250.0)],
+    "C1": [_line(1, "GPU-A", "GPU A", "NVIDIA", "GPU", 8, 500.0)],
+    "C2": [_line(1, "RAM-B", "RAM B", "Corsair", "RAM", 20, 50.0)],
+}
 
 
 # Paid after 30, 20 and 10 days: U1, U3, U5. U2 and C1 are overdue on AS_OF; C2 falls due exactly on AS_OF,
@@ -48,19 +60,6 @@ INVOICES = [
     _invoice("U5", "0003", "Initech", "USD", 750.0, datetime(2019, 12, 31), datetime(2020, 1, 30), datetime(2020, 1, 10)),
     _invoice("C1", "0100", "Maple ltd", "CAD", 4000.0, datetime(2020, 3, 3), datetime(2020, 4, 2)),
     _invoice("C2", "0100", "Maple ltd", "CAD", 1000.0, datetime(2020, 3, 20), datetime(2020, 5, 31)),
-]
-
-# Lines add up to their invoice totals. U3 has two GPU lines, so it must count as one GPU invoice.
-LINES = [
-    _line("U1", 1, "GPU-A", "GPU A", "NVIDIA", "GPU", 2, 400.0),
-    _line("U1", 2, "RAM-B", "RAM B", "Corsair", "RAM", 4, 50.0),
-    _line("U2", 1, "GPU-A", "GPU A", "NVIDIA", "GPU", 1, 500.0),
-    _line("U3", 1, "GPU-A", "GPU A", "NVIDIA", "GPU", 2, 400.0),
-    _line("U3", 2, "GPU-D", "GPU D", "NVIDIA", "GPU", 3, 400.0),
-    _line("U4", 1, "RAM-B", "RAM B", "Corsair", "RAM", 6, 50.0),
-    _line("U5", 1, "CPU-C", "CPU C", "AMD", "CPU", 3, 250.0),
-    _line("C1", 1, "GPU-A", "GPU A", "NVIDIA", "GPU", 8, 500.0),
-    _line("C2", 1, "RAM-B", "RAM B", "Corsair", "RAM", 20, 50.0),
 ]
 
 
@@ -84,9 +83,7 @@ def invoices(mongo_client):
     db_name = f"test_invoices_{uuid4().hex[:8]}"
     database = mongo_client[db_name]
     database["invoices"].insert_many(INVOICES)
-    database["invoice_items"].insert_many(LINES)
-    database["invoice_items"].create_index("invoiceId")
-    ensure_indexes(database["invoices"])
+    sync_indexes(database["invoices"], INVOICE_INDEXES)
 
     yield database["invoices"]
 
@@ -204,13 +201,18 @@ def test_analyze_invoices_filters_narrow_the_figures(invoices, filters, expected
         ({"status": "overdue", "as_of": AS_OF}, ["C1", "U2"], 2),
         ({"status": "open", "currency": "CAD", "sort_order": "asc"}, ["C1", "C2"], 2),
         ({"customer": "acme"}, ["U2", "U1"], 2),
+        ({"customer": "ACME I"}, ["U2"], 1),
+        # names are matched from their beginning, which the nameLower index can bound; every customer's name
+        # variants in the data share their first word, so a name beginning finds all of them
+        ({"customer": "corp"}, [], 0),
         ({"customer": "0002"}, ["U4", "U3"], 2),
         ({"customer": "."}, [], 0),
         ({"min_amount": 1000}, ["U3", "C2", "C1", "U1"], 4),
         ({"sort_by": "amount", "page_size": 2}, ["C1", "U3"], 7),
         ({"sort_by": "amount", "page_size": 2, "page": 4}, ["U4"], 7),
     ],
-    ids=["date_range_inclusive", "overdue", "open_cad_oldest_first", "customer_name_any_case", "customer_number",
+    ids=["date_range_inclusive", "overdue", "open_cad_oldest_first", "customer_name_any_case",
+         "customer_name_prefix_narrows", "customer_mid_name_fragment_does_not_match", "customer_number",
          "regex_metacharacter_is_literal", "min_amount_inclusive", "largest_first", "last_partial_page"],
 )
 def test_list_invoices_filters_sorts_and_pages(invoices, kwargs, expected_ids, expected_total):

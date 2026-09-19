@@ -11,17 +11,28 @@ CURRENCIES = [{"currency": "USD", "groupCount": 1, "rows": [{"invoiceCount": 2, 
 
 
 class FakeInvoices:
-    def __init__(self, result, edges=(datetime(2018, 12, 30), datetime(2020, 5, 22))):
+    def __init__(self, result, edges=(datetime(2018, 12, 30), datetime(2020, 5, 22)), total=0):
         self.result = result
         self.edges = edges
+        self.total = total
         self.pipelines = []
         self.options = []
         self.find_one_calls = []
+        self.finds = []
+        self.counts = []
 
     def aggregate(self, pipeline, **kwargs):
         self.pipelines.append(pipeline)
         self.options.append(kwargs)
         return iter(self.result)
+
+    def find(self, **kwargs):
+        self.finds.append(kwargs)
+        return iter(self.result)
+
+    def count_documents(self, criteria, **kwargs):
+        self.counts.append((criteria, kwargs))
+        return self.total
 
     def find_one(self, criteria, projection, **kwargs):
         self.find_one_calls.append(kwargs)
@@ -32,26 +43,22 @@ class FakeInvoices:
 
 
 @pytest.mark.parametrize(
-    ("cursor_result", "expected_total", "expected_items"),
-    [
-        ([{"items": [{"invoiceId": "1"}], "total": 1}], 1, [{"invoiceId": "1"}]),
-        ([{"items": [], "total": 0}], 0, []),
-        ([], 0, []),
-    ],
-    ids=["one_match", "no_matches", "empty_cursor"],
+    ("documents", "total"),
+    [([{"invoiceId": "1"}], 6), ([], 5), ([], 0)],
+    ids=["page_with_items", "page_past_the_end", "no_matches"],
 )
-def test_list_invoices_unwraps_facet_result(cursor_result, expected_total, expected_items):
+def test_list_invoices_returns_the_page_with_the_filtered_total(documents, total):
     # Arrange
-    collection = FakeInvoices(cursor_result)
+    collection = FakeInvoices(documents, total=total)
 
     # Act
     result = list_invoices(collection, InvoiceListParams(page=2, page_size=5))
 
     # Assert
-    assert result == {"page": 2, "pageSize": 5, "total": expected_total, "items": expected_items}
+    assert result == {"page": 2, "pageSize": 5, "total": total, "items": documents}
 
 
-def test_list_invoices_applies_filters_and_query_timeout():
+def test_list_invoices_page_and_count_share_the_filters_and_query_timeout():
     # Arrange
     collection = FakeInvoices([])
 
@@ -59,9 +66,12 @@ def test_list_invoices_applies_filters_and_query_timeout():
     list_invoices(collection, InvoiceListParams(currency="USD", status="open"))
 
     # Assert
-    assert (collection.pipelines[0][0], collection.options) == (
-        {"$match": {"currency": "USD", "isOpen": True}},
-        [{"maxTimeMS": QUERY_TIMEOUT_MS}],
+    assert (
+        [(call["filter"], call["max_time_ms"]) for call in collection.finds],
+        collection.counts,
+    ) == (
+        [({"currency": "USD", "isOpen": True}, QUERY_TIMEOUT_MS)],
+        [({"currency": "USD", "isOpen": True}, {"maxTimeMS": QUERY_TIMEOUT_MS})],
     )
 
 
@@ -137,11 +147,14 @@ def test_analyze_invoices_every_query_has_a_timeout():
 
 
 @pytest.mark.parametrize(
-    ("call", "params"),
-    [(analyze_invoices, InvoiceAnalyticsParams(status="overdue")), (list_invoices, InvoiceListParams(status="overdue"))],
+    ("call", "params", "criteria_of"),
+    [
+        (analyze_invoices, InvoiceAnalyticsParams(status="overdue"), lambda c: c.pipelines[0][0]["$match"]),
+        (list_invoices, InvoiceListParams(status="overdue"), lambda c: c.finds[0]["filter"]),
+    ],
     ids=["analyze", "list"],
 )
-def test_invoice_service_as_of_defaults_to_today(monkeypatch, call, params):
+def test_invoice_service_as_of_defaults_to_today(monkeypatch, call, params, criteria_of):
     # Arrange
     monkeypatch.setattr(service, "date", type("FixedDate", (), {"today": staticmethod(lambda: date(2026, 9, 18))}))
     collection = FakeInvoices([])
@@ -150,4 +163,4 @@ def test_invoice_service_as_of_defaults_to_today(monkeypatch, call, params):
     call(collection, params)
 
     # Assert
-    assert collection.pipelines[0][0]["$match"]["dates.dueInDate"] == {"$lt": datetime(2026, 9, 18)}
+    assert criteria_of(collection)["dates.dueInDate"] == {"$lt": datetime(2026, 9, 18)}

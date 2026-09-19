@@ -32,10 +32,18 @@ class FakeProducts:
 class FakeInvoices:
     def __init__(self):
         self.aggregate_calls = []
+        self.find_calls = []
 
     def aggregate(self, pipeline, **kwargs):
         self.aggregate_calls.append(pipeline)
-        return iter([{"items": [{"invoiceId": "1930438491", "dates": {"dueInDate": datetime(2020, 2, 10)}}], "total": 1}])
+        return iter([])
+
+    def find(self, **kwargs):
+        self.find_calls.append(kwargs)
+        return iter([{"invoiceId": "1930438491", "dates": {"dueInDate": datetime(2020, 2, 10)}}])
+
+    def count_documents(self, criteria, **kwargs):
+        return 1
 
     def find_one(self, *args, **kwargs):
         return {"dates": {"postingDate": datetime(2019, 1, 2)}}
@@ -54,16 +62,13 @@ def test_run_tool_search_products_strips_internal_fields(db):
     assert result["items"] == [{"sku": "GPU-H100-80G", "listPrice": 27999.0}]
 
 
-def test_run_tool_list_invoices_runs_the_filtered_page_pipeline(db):
+def test_run_tool_list_invoices_runs_the_filtered_page_query(db):
     # Arrange / Act
     run_tool(db, "list_invoices", {"status": "open", "page": 3, "page_size": 10})
 
     # Assert
-    [pipeline] = db["invoices"].aggregate_calls
-    assert (pipeline[0], pipeline[2]["$facet"]["items"][:2]) == (
-        {"$match": {"isOpen": True}},
-        [{"$skip": 20}, {"$limit": 10}],
-    )
+    [find] = db["invoices"].find_calls
+    assert (find["filter"], find["skip"], find["limit"]) == ({"isOpen": True}, 20, 10)
 
 
 def test_run_tool_list_invoices_serializes_dates_as_strings(db):

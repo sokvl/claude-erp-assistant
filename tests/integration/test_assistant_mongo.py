@@ -17,7 +17,7 @@ FIXTURE_INVOICES = [
     {
         "_id": invoice_id,
         "invoiceId": invoice_id,
-        "customer": {"number": "0200769623", "name": "WAL-MAR corp"},
+        "customer": {"number": "0200769623", "name": "WAL-MAR corp", "nameLower": "wal-mar corp"},
         "currency": "USD",
         "amounts": {"totalOpen": total},
         "isOpen": is_open,
@@ -84,9 +84,10 @@ def test_run_tool_list_invoices_returns_only_projected_fields(db):
     items = json.loads(run_tool(db, "list_invoices", {"page_size": 3, "sort_order": "asc"}))["items"]
 
     # Assert
-    assert [(sorted(item), sorted(item["dates"]), item["amounts"]) for item in items] == [
+    assert [(sorted(item), sorted(item["customer"]), sorted(item["dates"]), item["amounts"]) for item in items] == [
         (
             ["amounts", "currency", "customer", "dates", "invoiceId", "isOpen"],
+            ["name", "number"],
             ["clearDate", "dueInDate", "postingDate"],
             {"totalOpen": invoice["amounts"]["totalOpen"]},
         )

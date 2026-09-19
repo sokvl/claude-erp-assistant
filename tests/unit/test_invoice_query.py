@@ -10,7 +10,7 @@ from app.invoices.query import (
     INVOICE_PROJECTION,
     build_analytics_pipeline,
     build_invoice_filter,
-    build_list_pipeline,
+    build_list_query,
 )
 from app.invoices.schemas import InvoiceFilter
 from app.limits import DEFAULT_ANALYTICS_ROWS, MAX_ANALYTICS_ROWS
@@ -36,7 +36,16 @@ END_OF_DAY = (23, 59, 59, 999999)
             {"customer": "0200769623"},
             {"$or": [
                 {"customer.number": "0200769623"},
-                {"customer.name": {"$regex": "0200769623", "$options": "i"}},
+                {"customer.nameLower": {"$regex": "^0200769623"}},
+            ]},
+        ),
+        # any case matches without $options "i": a case-insensitive or unanchored regex cannot be bounded
+        # by the nameLower index and scans every key, a left-anchored lowercase prefix reads only its matches
+        (
+            {"customer": "Wal-Mar"},
+            {"$or": [
+                {"customer.number": "Wal-Mar"},
+                {"customer.nameLower": {"$regex": r"^wal\-mar"}},
             ]},
         ),
         # user text is matched literally, never as a regular expression
@@ -44,7 +53,7 @@ END_OF_DAY = (23, 59, 59, 999999)
             {"customer": "A.B*("},
             {"$or": [
                 {"customer.number": "A.B*("},
-                {"customer.name": {"$regex": r"A\.B\*\(", "$options": "i"}},
+                {"customer.nameLower": {"$regex": r"^a\.b\*\("}},
             ]},
         ),
         ({"customer": ""}, {}),
@@ -63,7 +72,7 @@ END_OF_DAY = (23, 59, 59, 999999)
                 "dates.postingDate": {"$gte": datetime(2019, 1, 1)},
                 "$or": [
                     {"customer.number": "WAL-MAR"},
-                    {"customer.name": {"$regex": r"WAL\-MAR", "$options": "i"}},
+                    {"customer.nameLower": {"$regex": r"^wal\-mar"}},
                 ],
                 "currency": "USD",
                 "isOpen": True,
@@ -73,7 +82,7 @@ END_OF_DAY = (23, 59, 59, 999999)
         ),
     ],
     ids=["no_filters", "date_range_inclusive", "from_only", "to_only", "to_last_day", "customer_number_or_name",
-         "customer_regex_escaped", "customer_empty", "currency", "open", "cleared", "overdue_before_as_of",
+         "customer_name_prefix_lowercased", "customer_regex_escaped", "customer_empty", "currency", "open", "cleared", "overdue_before_as_of",
          "min_amount_zero", "amount_range", "all_filters"],
 )
 def test_build_invoice_filter_builds_expected_criteria(kwargs, expected):
@@ -101,7 +110,7 @@ def test_build_invoice_filter_dates_are_bson_encodable_datetimes():
     )
 
 
-def _list_pipeline(**overrides):
+def _list_query(**overrides):
     kwargs = {
         "criteria": {"isOpen": True},
         "sort_by": InvoiceSortField.POSTING_DATE,
@@ -110,48 +119,52 @@ def _list_pipeline(**overrides):
         "page_size": 20,
     }
     kwargs.update(overrides)
-    return build_list_pipeline(**kwargs)
-
-
-def test_build_list_pipeline_sorts_before_facet_so_an_index_can_serve_the_sort():
-    # Arrange / Act
-    pipeline = _list_pipeline()
-
-    # Assert
-    assert [next(iter(stage)) for stage in pipeline] == ["$match", "$sort", "$facet", "$addFields"]
+    return build_list_query(**kwargs)
 
 
 @pytest.mark.parametrize(
     ("sort_by", "order", "expected"),
     [
-        (InvoiceSortField.POSTING_DATE, SortOrder.DESC, {"dates.postingDate": -1, "_id": -1}),
-        (InvoiceSortField.AMOUNT, SortOrder.ASC, {"amounts.totalOpen": 1, "_id": 1}),
+        (InvoiceSortField.POSTING_DATE, SortOrder.DESC, [("dates.postingDate", -1), ("_id", -1)]),
+        (InvoiceSortField.AMOUNT, SortOrder.ASC, [("amounts.totalOpen", 1), ("_id", 1)]),
     ],
     ids=["newest_first", "smallest_first"],
 )
-def test_build_list_pipeline_sorts_with_id_tiebreak(sort_by, order, expected):
+def test_build_list_query_sorts_with_id_tiebreak(sort_by, order, expected):
     # Arrange / Act
-    pipeline = _list_pipeline(sort_by=sort_by, order=order)
+    query = _list_query(sort_by=sort_by, order=order)
 
     # Assert
-    assert pipeline[1] == {"$sort": expected}
+    assert query["sort"] == expected
 
 
+# A find with skip/limit stops reading after the page, and the count of an indexed filter reads only index keys.
+# The former $facet pushed every matching document through the pipeline just to count it (48,839 reads per page).
 @pytest.mark.parametrize(
     ("page", "page_size", "expected_skip"),
     [(1, 20, 0), (3, 10, 20)],
     ids=["first_page", "third_page"],
 )
-def test_build_list_pipeline_pages_and_projects_items(page, page_size, expected_skip):
+def test_build_list_query_is_a_bounded_find_over_the_criteria(page, page_size, expected_skip):
     # Arrange / Act
-    pipeline = _list_pipeline(page=page, page_size=page_size)
+    query = _list_query(page=page, page_size=page_size)
 
     # Assert
-    assert pipeline[2]["$facet"]["items"] == [
-        {"$skip": expected_skip},
-        {"$limit": page_size},
-        {"$project": INVOICE_PROJECTION},
-    ]
+    assert query == {
+        "filter": {"isOpen": True},
+        "projection": INVOICE_PROJECTION,
+        "sort": [("dates.postingDate", -1), ("_id", -1)],
+        "skip": expected_skip,
+        "limit": page_size,
+    }
+
+
+def test_invoice_projection_hides_the_customer_search_key():
+    # Arrange / Act: customer.nameLower exists only to make the name prefix search index-bounded
+    customer_fields = sorted(field for field in INVOICE_PROJECTION if field.startswith("customer"))
+
+    # Assert
+    assert customer_fields == ["customer.name", "customer.number"]
 
 
 @pytest.mark.parametrize(
@@ -159,10 +172,10 @@ def test_build_list_pipeline_pages_and_projects_items(page, page_size, expected_
     [({"sort_by": "posting_date"}, "sort_by"), ({"order": "desc"}, "order")],
     ids=["raw_sort_by", "raw_order"],
 )
-def test_build_list_pipeline_raw_string_raises_value_error(overrides, message):
+def test_build_list_query_raw_string_raises_value_error(overrides, message):
     # Arrange / Act / Assert
     with pytest.raises(ValueError, match=message):
-        _list_pipeline(**overrides)
+        _list_query(**overrides)
 
 
 def _analytics(group_by=None, limit=None, criteria=None):
@@ -185,8 +198,7 @@ def _row_selection(pipeline):
         (None, ["$match", "$project", "$group", "$set", "$group", "$sort", "$project"]),
         (GroupBy.CUSTOMER, ["$match", "$project", "$group", "$set", "$group", "$sort", "$project"]),
         (GroupBy.QUARTER, ["$match", "$project", "$group", "$set", "$group", "$sort", "$project"]),
-        (GroupBy.CATEGORY,
-         ["$match", "$lookup", "$unwind", "$group", "$set", "$group", "$set", "$group", "$sort", "$project"]),
+        (GroupBy.CATEGORY, ["$match", "$unwind", "$group", "$set", "$group", "$set", "$group", "$sort", "$project"]),
     ],
     ids=["totals", "customer", "quarter", "category"],
 )
@@ -203,19 +215,16 @@ def test_build_analytics_pipeline_stage_order_per_grain(group_by, expected):
     [(GroupBy.PRODUCT, "sku"), (GroupBy.BRAND, "brand"), (GroupBy.CATEGORY, "category")],
     ids=["product", "brand", "category"],
 )
-def test_build_analytics_pipeline_line_grain_joins_items_on_invoice_primary_key(group_by, field):
-    # Arrange: invoice_items.invoiceId holds invoices._id; invoices.invoiceId is null on some documents
+def test_build_analytics_pipeline_line_grain_unwinds_embedded_lines_per_invoice(group_by, field):
+    # Arrange: lines are embedded in their invoice; a $lookup into a line collection cost ~1.4 s for all invoices.
+    # Grouping by (key, invoice) first makes an invoice with two GPU lines count as one GPU invoice.
     pipeline = _analytics(group_by)
 
     # Act
-    lookup = pipeline[1]["$lookup"]
+    unwind, per_invoice = pipeline[1], pipeline[2]["$group"]["_id"]
 
     # Assert
-    assert (lookup["localField"], lookup["foreignField"], pipeline[3]["$group"]["_id"]) == (
-        "_id",
-        "invoiceId",
-        {"key": f"$lines.{field}", "invoice": "$_id"},
-    )
+    assert (unwind, per_invoice) == ({"$unwind": "$lines"}, {"key": f"$lines.{field}", "invoice": "$_id"})
 
 
 def test_build_analytics_pipeline_ranks_rows_within_each_currency():
@@ -302,7 +311,7 @@ def test_build_analytics_pipeline_period_key_is_first_day_of_period(group_by, un
 
 def test_build_analytics_pipeline_rounds_money_after_grouping():
     # Arrange / Act
-    rounded = _analytics(GroupBy.PRODUCT)[6]["$set"]
+    rounded = _analytics(GroupBy.PRODUCT)[5]["$set"]
 
     # Assert
     assert (rounded["totalAmount"], rounded["averageDaysToPay"], rounded["averageUnitPrice"]) == (

@@ -1,6 +1,11 @@
 """Generate synthetic line items for each invoice so they sum exactly to
-that invoice's total_open_amount, and load products + invoice_items into
-MongoDB.
+that invoice's total_open_amount, embed them in the invoice as `lines`, and
+load products into MongoDB. Run it after load_to_mongo.py.
+
+Lines are embedded rather than kept in their own collection: an invoice has
+at most 5 of them, they never change after the invoice is issued, and the
+product/brand/category analytics would otherwise join every invoice to its
+lines (measured at ~1.4 s for the whole data set).
 
 Approach: for each invoice, pick a handful of products (tier mix chosen by
 invoice size, so a $600k invoice isn't "500,000x thermal paste"), assign
@@ -15,8 +20,9 @@ import math
 import random
 
 import pandas as pd
-from pymongo import ASCENDING, MongoClient, UpdateOne
+from pymongo import MongoClient, UpdateOne
 
+from indexes import PRODUCT_INDEXES, sync_indexes
 from products import PRODUCTS, TIER_QTY_RANGE
 
 SIZE_BRACKETS = [
@@ -61,7 +67,7 @@ def pick_composition(target: float, rng: random.Random):
     return best[1], best[2]
 
 
-def build_line_items(invoice_id: str, target: float, rng: random.Random):
+def build_line_items(target: float, rng: random.Random):
     items, scale = pick_composition(target, rng)
 
     lines = []
@@ -78,8 +84,6 @@ def build_line_items(invoice_id: str, target: float, rng: random.Random):
         running_total += line_total
 
         lines.append({
-            "_id": f"{invoice_id}-{i}",
-            "invoiceId": invoice_id,
             "lineNo": i,
             "sku": product["sku"],
             "productName": product["name"],
@@ -103,32 +107,6 @@ def load_invoices(csv_path: str) -> pd.DataFrame:
     return df.drop_duplicates(subset="invoiceKey", keep="last")
 
 
-def ensure_product_indexes(collection):
-    """Indexes supporting spec search (app/catalog/query.py).
-
-    At 52 documents these cannot measurably help - the whole collection is a
-    single storage page, where a COLLSCAN beats IXSCAN+FETCH. They encode
-    query intent and are already correct if the catalog grows.
-
-    The spec indexes are partial because 41 of 52 products have no `specs` at
-    all, so this keeps them at 11 entries instead of 52 with 41 nulls.
-    """
-    # (category, listPrice) makes a standalone category index redundant by the
-    # index-prefix rule, so it replaces rather than supplements it.
-    collection.create_index([("category", ASCENDING), ("listPrice", ASCENDING)], name="category_listPrice")
-    collection.create_index([("brand", ASCENDING)], name="brand")
-    collection.create_index(
-        [("specs.vramGb", ASCENDING), ("specs.fp16TensorTflopsDense", ASCENDING)],
-        name="specs_vram_fp16",
-        partialFilterExpression={"specs": {"$exists": True}},
-    )
-    collection.create_index(
-        [("specs.useCases", ASCENDING)],
-        name="specs_useCases",
-        partialFilterExpression={"specs": {"$exists": True}},
-    )
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", default="seed/dataset.csv")
@@ -145,36 +123,33 @@ def main():
     db = client[args.db]
 
     products_col = db["products"]
-    ensure_product_indexes(products_col)
+    sync_indexes(products_col, PRODUCT_INDEXES)
     product_ops = [UpdateOne({"_id": p["sku"]}, {"$set": {**p, "_id": p["sku"]}}, upsert=True) for p in PRODUCTS]
     products_col.bulk_write(product_ops, ordered=False)
     print(f"Upserted {len(PRODUCTS)} products")
 
-    items_col = db["invoice_items"]
-    items_col.create_index([("invoiceId", ASCENDING)])
-
+    invoices_col = db["invoices"]
     ops = []
+    matched = 0
     total_lines = 0
     max_abs_diff = 0.0
     for _, row in df.iterrows():
-        invoice_id = row["invoiceKey"]
         target = round(float(row["total_open_amount"]), 2)
-        lines = build_line_items(invoice_id, target, rng)
+        lines = build_line_items(target, rng)
 
         reconciled = round(sum(l["lineTotal"] for l in lines), 2)
         max_abs_diff = max(max_abs_diff, abs(reconciled - target))
 
-        for line in lines:
-            ops.append(UpdateOne({"_id": line["_id"]}, {"$set": line}, upsert=True))
+        ops.append(UpdateOne({"_id": row["invoiceKey"]}, {"$set": {"lines": lines}}))
         total_lines += len(lines)
 
         if len(ops) >= args.batch_size:
-            items_col.bulk_write(ops, ordered=False)
+            matched += invoices_col.bulk_write(ops, ordered=False).matched_count
             ops = []
     if ops:
-        items_col.bulk_write(ops, ordered=False)
+        matched += invoices_col.bulk_write(ops, ordered=False).matched_count
 
-    print(f"Upserted {total_lines} line items across {len(df)} invoices")
+    print(f"Embedded {total_lines} line items in {matched} of {len(df)} invoices")
     print(f"Max |reconciled - target| across all invoices: {max_abs_diff}")
 
 
