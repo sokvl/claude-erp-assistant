@@ -3,6 +3,7 @@ services:
     image: mongo:7
     container_name: invoices_mongo
     restart: unless-stopped
+    command: ["--wiredTigerCollectionBlockCompressor=zstd"]
     ports:
       - "27017:27017"
     volumes:
