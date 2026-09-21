@@ -3,4 +3,5 @@ uvicorn
 pymongo
 python-dotenv
 pandas
+matplotlib
 anthropic==1.6.0
