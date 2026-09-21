@@ -1,0 +1,9 @@
+-r requirements.txt
+
+pytest
+pytest-cov
+
+# starlette.testclient requires httpx2 specifically; plain httpx is deprecated
+# there. It arrives transitively via anthropic, but the tests depend on it
+# directly, so it is declared here.
+httpx2

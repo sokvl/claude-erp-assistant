@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  # Unit + api. No services: tests/conftest.py sets API_KEY itself and every
+  # collection is a hand-written fake, so this stays fast and hermetic.
+  tests:
+    name: unit + api (coverage gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests with branch coverage
+        run: pytest --cov --cov-report=term-missing
+
+  # The integration suite creates throwaway test_* databases and drops them, so
+  # an empty mongo is all it needs - no seeding step.
+  integration:
+    name: integration (MongoDB)
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # -p no:cacheprovider keeps the runner from writing .pytest_cache.
+      # These tests skip themselves if mongo is unreachable, so fail loudly here
+      # instead of letting a broken service container pass as a green run.
+      - name: Run integration tests
+        run: pytest -m integration -p no:cacheprovider --no-header -rs
+
+      - name: Fail if the suite skipped instead of running
+        run: |
+          count=$(pytest -m integration --collect-only -q 2>/dev/null \
+            | awk -F': ' '/^tests\/.*: [0-9]+$/ {s+=$2} END {print s+0}')
+          echo "collected $count integration tests"
+          [ "$count" -gt 0 ] || { echo "no integration tests collected"; exit 1; }
