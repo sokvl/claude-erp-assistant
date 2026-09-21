@@ -2,12 +2,14 @@ from datetime import date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from indexes import INVOICE_INDEXES, sync_indexes
+from indexes import CHART_INDEXES, INVOICE_INDEXES, sync_indexes
 
 from app.catalog.enums import SortField, SortOrder
 from app.catalog.query import build_product_filter, build_search_pipeline
+from app.charts.storage import METADATA_PROJECTION
 from app.invoices.query import build_analytics_pipeline, build_invoice_filter, build_list_query
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceFilter, InvoiceListParams
+from app.limits import CHART_TTL_DAYS, MAX_RECENT_CHARTS
 
 pytestmark = pytest.mark.integration
 
@@ -243,3 +245,74 @@ def test_sync_indexes_leaves_exactly_the_declared_set(stale_invoices):
 
     # Assert
     assert sorted(stale_invoices.index_information()) == sorted(["_id_", *(i.document["name"] for i in INVOICE_INDEXES)])
+
+
+CHART_CONVERSATIONS = 5
+CHARTS_BY_CONVERSATION = "conversationId_1_createdAt_1"
+
+
+def _chart(i):
+    created = datetime(2020, 1, 1) + timedelta(hours=i)
+    return {
+        "_id": f"chart{i:04d}",
+        "conversationId": f"conv-{i % CHART_CONVERSATIONS}",
+        "createdAt": created,
+        "expiresAt": created + timedelta(days=CHART_TTL_DAYS),
+        "title": "Invoiced by customer",
+        "chartType": "bar",
+        "metric": "total",
+        "groupBy": "customer",
+        "image": b"\x89PNG" + bytes(200),
+    }
+
+
+@pytest.fixture(scope="module")
+def chart_db(mongo_client):
+    # Arrange: a throwaway database, never the demo data in invoices_db
+    db_name = f"test_charts_{uuid4().hex[:8]}"
+    database = mongo_client[db_name]
+    database["charts"].insert_many([_chart(i) for i in range(200)])
+    sync_indexes(database["charts"], CHART_INDEXES)
+
+    yield database
+
+    # Annihilate
+    mongo_client.drop_database(db_name)
+
+
+# Reopening a conversation reads only its own newest charts: the compound index
+# delivers the sort, so the page stops after limit keys instead of sorting every
+# chart the conversation ever produced, and the image bytes are never fetched.
+def test_recent_charts_page_is_served_by_the_conversation_index(chart_db):
+    # Arrange
+    command = {
+        "find": "charts",
+        "filter": {"conversationId": "conv-1"},
+        "projection": METADATA_PROJECTION,
+        "sort": {"createdAt": -1},
+        "limit": MAX_RECENT_CHARTS,
+    }
+
+    # Act
+    explain = _explain(chart_db, command)
+
+    # Assert
+    stages = _winning_stages(explain)
+    keys, _ = _examined(explain)
+    assert (
+        CHARTS_BY_CONVERSATION in {name for _, name in stages},
+        [stage for stage, _ in stages if stage in INTERSECTIONS],
+        "SORT" in {stage for stage, _ in stages},
+        keys <= MAX_RECENT_CHARTS,
+    ) == (True, [], False, True), stages
+
+
+# mongod only expires documents when the TTL index says to expire on the stored
+# date itself; any other expireAfterSeconds would shift every chart's lifetime.
+def test_charts_expire_on_their_stored_expiry(chart_db):
+    # Arrange / Act
+    indexes = chart_db["charts"].index_information()
+
+    # Assert
+    [ttl] = [index for index in indexes.values() if "expireAfterSeconds" in index]
+    assert (ttl["key"], ttl["expireAfterSeconds"]) == ([("expiresAt", 1)], 0)
