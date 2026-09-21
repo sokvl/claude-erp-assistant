@@ -17,6 +17,14 @@ No currency index: two values, and analytics already splits per currency. No
 index on `dates.clearDate`: nothing filters on it, and it is stored as null on
 open invoices, which a sparse index would still hold.
 
+charts - written by the app when the analyst draws one, read back by id and
+by conversation:
+- expiresAt is a TTL index (expireAfterSeconds=0), so mongod deletes a chart
+  once its stored expiry passes; nothing else prunes the collection.
+- (conversationId, createdAt): the recent-charts list for one conversation,
+  newest first. createdAt descends in the query, which an ascending index
+  serves by walking it backwards.
+
 products - 52 documents fit in one storage page, where a collection scan beats
 any index lookup, and every spec field lives on the 11 GPUs that `category`
 already isolates. (category, listPrice) is kept for the primary shape: a
@@ -32,6 +40,11 @@ INVOICE_INDEXES = [
     IndexModel([("amounts.totalOpen", ASCENDING), ("_id", ASCENDING)]),
     IndexModel([("customer.number", ASCENDING)]),
     IndexModel([("customer.nameLower", ASCENDING)]),
+]
+
+CHART_INDEXES = [
+    IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
+    IndexModel([("conversationId", ASCENDING), ("createdAt", ASCENDING)]),
 ]
 
 PRODUCT_INDEXES = [
