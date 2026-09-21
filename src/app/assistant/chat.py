@@ -51,6 +51,11 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class ChartRef:
+    chart_id: str
+
+
+@dataclass(frozen=True)
 class Answer:
     text: str
     truncated: bool
@@ -72,7 +77,7 @@ class ChatError(Exception):
         self.message = ERROR_MESSAGES[code]
 
 
-ChatEvent = TextDelta | ToolCall | Answer
+ChatEvent = TextDelta | ToolCall | ChartRef | Answer
 
 
 @cache
@@ -102,13 +107,14 @@ def run_turn(
     history: Sequence[dict[str, Any]],
     user_text: str,
     steps: list[TraceStep] | None = None,
+    conversation_id: str | None = None,
 ) -> Iterator[ChatEvent]:
     steps = [] if steps is None else steps
     run_id = uuid4().hex[:8]
     outcome = "closed"
     try:
         request = build_request(profile, tools, date.today())
-        yield from _run_turn(client, db, request, history, user_text, steps)
+        yield from _run_turn(client, db, request, history, user_text, steps, conversation_id)
         outcome = "done"
     except ChatError as exc:
         outcome = exc.code
@@ -127,6 +133,7 @@ def _run_turn(
     history: Sequence[dict[str, Any]],
     user_text: str,
     steps: list[TraceStep],
+    conversation_id: str | None,
 ) -> Iterator[ChatEvent]:
     messages: list[dict[str, Any]] = [*history, {"role": "user", "content": user_text}]
     texts: list[str] = []
@@ -146,7 +153,10 @@ def _run_turn(
             results = []
             for block in tool_uses:
                 yield ToolCall(block.name)
-                results.append(_tool_result(db, block, steps))
+                result, artifact = _tool_result(db, block, steps, conversation_id)
+                if artifact:
+                    yield ChartRef(artifact)
+                results.append(result)
             messages = [
                 *messages,
                 {"role": "assistant", "content": [block.model_dump(exclude_none=True) for block in message.content]},
@@ -238,14 +248,19 @@ def _stream_once(
     return message
 
 
-def _tool_result(db: Database, block: ToolUseBlock, steps: list[TraceStep]) -> dict[str, Any]:
+def _tool_result(
+    db: Database,
+    block: ToolUseBlock,
+    steps: list[TraceStep],
+    conversation_id: str | None,
+) -> tuple[dict[str, Any], str | None]:
     name = f"tool {block.name}"
     started_at = time.perf_counter()
     try:
-        content = run_tool(db, block.name, block.input)
+        output = run_tool(db, block.name, block.input, conversation_id)
     except ToolInputError as exc:
         _record(steps, name, "is_error", started_at, str(exc)[:80])
-        return {"type": "tool_result", "tool_use_id": block.id, "content": str(exc), "is_error": True}
+        return {"type": "tool_result", "tool_use_id": block.id, "content": str(exc), "is_error": True}, None
     except PyMongoError as exc:
         _record(steps, name, "FAIL", started_at, type(exc).__name__)
         logger.exception("tool %s failed on the database", block.name)
@@ -253,9 +268,14 @@ def _tool_result(db: Database, block: ToolUseBlock, steps: list[TraceStep]) -> d
     except Exception as exc:
         _record(steps, name, "is_error", started_at, f"unexpected {type(exc).__name__}")
         logger.exception("tool %s failed unexpectedly", block.name)
-        return {"type": "tool_result", "tool_use_id": block.id, "content": TOOL_FAILURE_MESSAGE, "is_error": True}
-    _record(steps, name, "ok", started_at, f"{len(content)} chars")
-    return {"type": "tool_result", "tool_use_id": block.id, "content": content}
+        return {
+            "type": "tool_result",
+            "tool_use_id": block.id,
+            "content": TOOL_FAILURE_MESSAGE,
+            "is_error": True,
+        }, None
+    _record(steps, name, "ok", started_at, f"{len(output.content)} chars")
+    return {"type": "tool_result", "tool_use_id": block.id, "content": output.content}, output.artifact
 
 
 def _record(

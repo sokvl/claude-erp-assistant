@@ -3,7 +3,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app.assistant.chat import ERROR_MESSAGES, Answer, ChatError, TextDelta, ToolCall, TraceStep
+from app.assistant.chat import ERROR_MESSAGES, Answer, ChartRef, ChatError, TextDelta, ToolCall, TraceStep
 from app.assistant import memory
 from app.assistant.memory import ConversationStore
 from app.assistant.profiles import AssistantName
@@ -31,8 +31,10 @@ class ConflictingStore(ConversationStore):
         return False
 
 
-def _scripted_turn(*items, seen_history=None, seen_turns=None):
-    def fake_run_turn(client, db, profile, tools, history, user_text, steps):
+def _scripted_turn(*items, seen_history=None, seen_turns=None, seen_conversations=None):
+    def fake_run_turn(client, db, profile, tools, history, user_text, steps, conversation_id=None):
+        if seen_conversations is not None:
+            seen_conversations.append(conversation_id)
         if seen_history is not None:
             seen_history.append(list(history))
         if seen_turns is not None:
@@ -243,7 +245,7 @@ def test_chat_without_anthropic_credentials_returns_503(client, monkeypatch):
     ("body", "expected"),
     [
         ({"message": "question"}, (AssistantName.ADVISOR, ["get_product_facets", "search_products"])),
-        ({"message": "question", "assistant": "analyst"}, (AssistantName.ANALYST, ["analyze_invoices", "list_invoices"])),
+        ({"message": "question", "assistant": "analyst"}, (AssistantName.ANALYST, ["analyze_invoices", "chart_invoices", "list_invoices"])),
     ],
     ids=["default_is_advisor", "analyst"],
 )
@@ -289,3 +291,46 @@ def test_chat_conversation_of_the_other_assistant_is_unknown(client, monkeypatch
 
     # Assert
     assert response.status_code == 404
+
+
+# The page needs the id to fetch the image with the API key; the chart itself is
+# never written to conversation memory, only the question and the answer text.
+def test_chat_turn_with_a_chart_streams_its_id_and_keeps_it_out_of_memory(client, store, monkeypatch):
+    # Arrange
+    monkeypatch.setattr(
+        chat_router,
+        "run_turn",
+        _scripted_turn(
+            ToolCall("chart_invoices"),
+            ChartRef("chart-1"),
+            TextDelta("Revenue rose."),
+            Answer("Revenue rose.", truncated=False),
+        ),
+    )
+
+    # Act
+    events = _events(client.post("/chat", json={"message": "trend", "assistant": "analyst"}, headers=AUTH))
+
+    # Assert
+    assert [name for name, _ in events] == ["conversation", "tool", "chart", "text", "done"]
+    assert dict(events)["chart"] == {"chart_id": "chart-1"}
+    assert store.history(events[0][1]["conversation_id"]) == [
+        {"role": "user", "content": "trend"},
+        {"role": "assistant", "content": "Revenue rose."},
+    ]
+
+
+def test_chat_turn_passes_the_conversation_id_to_the_agent_loop(client, monkeypatch):
+    # Arrange
+    seen = []
+    monkeypatch.setattr(
+        chat_router,
+        "run_turn",
+        _scripted_turn(Answer("Hi", truncated=False), seen_conversations=seen),
+    )
+
+    # Act
+    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+
+    # Assert
+    assert seen == [events[0][1]["conversation_id"]]

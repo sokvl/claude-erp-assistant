@@ -6,6 +6,7 @@ from pydantic import Field
 from app.assistant.profiles import AssistantName
 from app.catalog.enums import Architecture, Brand, Category, MemoryType, SortField, SortOrder, UseCase
 from app.catalog.schemas import ProductSearchParams
+from app.charts.enums import ChartMetric, ChartType
 from app.invoices.enums import GroupBy, InvoiceSortField, InvoiceStatus
 from app.invoices.schemas import InvoiceListParams
 from app.limits import (
@@ -26,6 +27,7 @@ SEARCH_PRODUCTS = "search_products"
 GET_PRODUCT_FACETS = "get_product_facets"
 LIST_INVOICES = "list_invoices"
 ANALYZE_INVOICES = "analyze_invoices"
+CHART_INVOICES = "chart_invoices"
 
 
 class SearchProductsInput(ProductSearchParams):
@@ -89,6 +91,25 @@ Rankings return {DEFAULT_ANALYTICS_ROWS} rows per currency unless limit is set, 
 Do not:
 - Add, compare or rank amounts across currencies; every currency is reported separately.
 - Use it for product or catalog questions."""
+
+CHART_INVOICES_DESCRIPTION = f"""Compute invoice figures and draw them as a chart. Takes the same filters as analyze_invoices and returns the same {{asOf, groupBy, filters, coverage, currencies}}, plus chartId and chartTitle. The chart is rendered from those rows and shown to the employee next to your answer; one panel per currency, never mixed.
+
+Use it whenever the shape of the figures helps, on its own or alongside a table:
+- A trend over time -> group_by=month, quarter or year with chart_type=line.
+- A ranking of customers, products, brands or categories -> group_by with chart_type=bar and limit=N.
+- How much of the money is cleared, open and overdue -> chart_type=stacked, with or without group_by.
+
+Because it returns the rows as well as the chart, one call is enough to write the table and draw the picture; you do not need to call analyze_invoices for the same figures first. You may still call it after an analyze_invoices call, for instance to chart a period you have just looked at, or call it twice for two different views the employee asked to compare.
+
+metric picks what is drawn: {", ".join(member.value for member in ChartMetric)}. units and average_unit_price exist only for product, brand or category groupings, average_unit_price only for product. chart_type=line needs a month, quarter or year grouping; chart_type=stacked always splits the total, so leave metric at total.
+
+The rows in the result are the answer: state the figures from them in your reply exactly as always. The chart only illustrates them.
+
+Do not:
+- Use it for a single figure with no grouping, unless chart_type=stacked; one number is not a chart.
+- Claim a chart when chartId is null; that means no invoices matched, so answer in text and say so.
+- Describe the picture, its colours or its axes, or treat it as a source of figures."""
+
 
 def _search_properties() -> dict[str, Any]:
     fields = SearchProductsInput.model_fields
@@ -289,6 +310,24 @@ def _analyze_invoices_properties() -> dict[str, Any]:
     }
 
 
+def _chart_invoices_properties() -> dict[str, Any]:
+    return _analyze_invoices_properties() | {
+        "chart_type": {
+            "type": "string",
+            "enum": [member.value for member in ChartType],
+            "description": (
+                "line = a trend, needs group_by month, quarter or year. bar = a ranking, needs a group_by. "
+                "stacked = the total split into cleared, open and overdue."
+            ),
+        },
+        "metric": {
+            "type": "string",
+            "enum": [member.value for member in ChartMetric],
+            "description": f"What the chart plots. Defaults to {ChartMetric.TOTAL}. Ignored by chart_type=stacked.",
+        },
+    }
+
+
 def _invoice_tool(name: str, description: str, properties: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": name,
@@ -299,9 +338,10 @@ def _invoice_tool(name: str, description: str, properties: dict[str, Any]) -> di
 
 LIST_INVOICES_TOOL = _invoice_tool(LIST_INVOICES, LIST_INVOICES_DESCRIPTION, _list_invoices_properties())
 ANALYZE_INVOICES_TOOL = _invoice_tool(ANALYZE_INVOICES, ANALYZE_INVOICES_DESCRIPTION, _analyze_invoices_properties())
+CHART_INVOICES_TOOL = _invoice_tool(CHART_INVOICES, CHART_INVOICES_DESCRIPTION, _chart_invoices_properties())
 
 
 TOOLS: Mapping[AssistantName, list[dict[str, Any]]] = {
     AssistantName.ADVISOR: [PRODUCT_FACETS_TOOL, SEARCH_PRODUCTS_TOOL],
-    AssistantName.ANALYST: [ANALYZE_INVOICES_TOOL, LIST_INVOICES_TOOL],
+    AssistantName.ANALYST: [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, LIST_INVOICES_TOOL],
 }

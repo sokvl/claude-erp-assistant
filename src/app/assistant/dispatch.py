@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
@@ -7,6 +8,7 @@ from pymongo.database import Database
 
 from app.assistant.tools import (
     ANALYZE_INVOICES,
+    CHART_INVOICES,
     GET_PRODUCT_FACETS,
     LIST_INVOICES,
     SEARCH_PRODUCTS,
@@ -15,6 +17,9 @@ from app.assistant.tools import (
 )
 from app.catalog import vocab
 from app.catalog.service import search_catalog
+from app.charts.schemas import ChartParams
+from app.charts.service import chart_analytics
+from app.charts.storage import CHART_COLLECTION
 from app.invoices.schemas import InvoiceAnalyticsParams
 from app.invoices.service import analyze_invoices, list_invoices
 
@@ -28,18 +33,24 @@ class ToolInputError(ValueError):
     pass
 
 
-def run_tool(db: Database, name: str, tool_input: Any) -> str:
+@dataclass(frozen=True)
+class ToolOutput:
+    content: str
+    artifact: str | None = None
+
+
+def run_tool(db: Database, name: str, tool_input: Any, conversation_id: str | None = None) -> ToolOutput:
     logger.debug("tool %s called with %s", name, tool_input)
     try:
-        result = _dispatch(db, name, tool_input)
+        result = _dispatch(db, name, tool_input, conversation_id)
     except ValidationError as exc:
         raise ToolInputError(_describe(exc)) from exc
     content = json.dumps(result, default=str, separators=(",", ":"), ensure_ascii=False)
     logger.debug("tool %s returned %s", name, content)
-    return content
+    return ToolOutput(content, result.get("chartId"))
 
 
-def _dispatch(db: Database, name: str, tool_input: Any) -> Any:
+def _dispatch(db: Database, name: str, tool_input: Any, conversation_id: str | None) -> dict[str, Any]:
     if name == SEARCH_PRODUCTS:
         params = SearchProductsInput.model_validate(tool_input)
         result = search_catalog(db["products"], params)
@@ -54,6 +65,13 @@ def _dispatch(db: Database, name: str, tool_input: Any) -> Any:
         return list_invoices(db["invoices"], ListInvoicesInput.model_validate(tool_input))
     if name == ANALYZE_INVOICES:
         return analyze_invoices(db["invoices"], InvoiceAnalyticsParams.model_validate(tool_input))
+    if name == CHART_INVOICES:
+        return chart_analytics(
+            db["invoices"],
+            db[CHART_COLLECTION],
+            ChartParams.model_validate(tool_input),
+            conversation_id,
+        )
     raise ToolInputError(f"Unknown tool: {name}")
 
 

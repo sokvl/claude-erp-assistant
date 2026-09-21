@@ -3,6 +3,7 @@ import pytest
 from app.assistant.profiles import AssistantName
 from app.assistant.tools import (
     ANALYZE_INVOICES_TOOL,
+    CHART_INVOICES_TOOL,
     LIST_INVOICES_TOOL,
     PRODUCT_FACETS_TOOL,
     SEARCH_PRODUCTS_TOOL,
@@ -209,8 +210,8 @@ def test_search_products_input_accepts_every_enum_value_the_tool_schema_offers()
     ("assistant", "expected"),
     [
         (AssistantName.ADVISOR, [PRODUCT_FACETS_TOOL, SEARCH_PRODUCTS_TOOL]),
-        (AssistantName.ANALYST, [ANALYZE_INVOICES_TOOL, LIST_INVOICES_TOOL]),
-        ("analyst", [ANALYZE_INVOICES_TOOL, LIST_INVOICES_TOOL]),
+        (AssistantName.ANALYST, [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, LIST_INVOICES_TOOL]),
+        ("analyst", [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, LIST_INVOICES_TOOL]),
     ],
     ids=["advisor", "analyst", "analyst_plain_string"],
 )

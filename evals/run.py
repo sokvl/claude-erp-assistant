@@ -31,15 +31,16 @@ class Recorder:
         self.calls: list[dict[str, Any]] = []
         self.steps: list[chat.TraceStep] = []
 
-    def run_tool(self, db: Any, name: str, tool_input: Any) -> str:
+    def run_tool(self, db: Any, name: str, tool_input: Any, conversation_id: str | None = None) -> Any:
         call = {"name": name, "input": tool_input}
         self.calls.append(call)
         try:
-            call["output"] = run_tool(db, name, tool_input)
+            output = run_tool(db, name, tool_input, conversation_id)
         except Exception as error:
             call["error"] = str(error)
             raise
-        return call["output"]
+        call["output"] = output.content
+        return output
 
     def record_usage(
         self, db: Any, conversation_id: str, profile: Profile, steps: list[chat.TraceStep], outcome: str

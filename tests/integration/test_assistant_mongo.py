@@ -65,7 +65,7 @@ def test_run_tool_search_products_matches_direct_catalog_search(db, tool_input, 
     ]
 
     # Act
-    result = json.loads(run_tool(db, "search_products", tool_input))
+    result = json.loads(run_tool(db, "search_products", tool_input).content)
 
     # Assert
     assert (result == _json_roundtrip(direct), len(result["items"])) == (True, expected_count)
@@ -73,7 +73,7 @@ def test_run_tool_search_products_matches_direct_catalog_search(db, tool_input, 
 
 def test_run_tool_search_products_never_exposes_internal_fields(db):
     # Arrange / Act
-    items = json.loads(run_tool(db, "search_products", {}))["items"]
+    items = json.loads(run_tool(db, "search_products", {}).content)["items"]
 
     # Assert
     assert [sorted(HIDDEN_PRODUCT_FIELDS & item.keys()) for item in items] == [[] for _ in items]
@@ -81,7 +81,7 @@ def test_run_tool_search_products_never_exposes_internal_fields(db):
 
 def test_run_tool_list_invoices_returns_only_projected_fields(db):
     # Arrange / Act
-    items = json.loads(run_tool(db, "list_invoices", {"page_size": 3, "sort_order": "asc"}))["items"]
+    items = json.loads(run_tool(db, "list_invoices", {"page_size": 3, "sort_order": "asc"}).content)["items"]
 
     # Assert
     assert [(sorted(item), sorted(item["customer"]), sorted(item["dates"]), item["amounts"]) for item in items] == [
@@ -100,7 +100,7 @@ def test_run_tool_get_product_facets_matches_live_vocabularies(db):
     expected = vocab.get_all_vocabularies(db["products"])
 
     # Act
-    result = json.loads(run_tool(db, "get_product_facets", {}))
+    result = json.loads(run_tool(db, "get_product_facets", {}).content)
 
     # Assert
     assert result == expected

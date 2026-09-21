@@ -9,13 +9,22 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.database import Database
 
-from app.assistant.chat import Answer, ChatError, TextDelta, ToolCall, TraceStep, get_client, run_turn
+from app.assistant.chat import (
+    Answer,
+    ChartRef,
+    ChatError,
+    TextDelta,
+    ToolCall,
+    TraceStep,
+    get_client,
+    run_turn,
+)
 from app.assistant.memory import ConversationStore, get_store
 from app.assistant.profiles import PROFILES, AssistantName
 from app.assistant.tools import TOOLS
 from app.assistant.usage import record_usage
 from app.db import get_database
-from app.limits import MAX_CHAT_MESSAGE_LENGTH
+from app.limits import MAX_CHAT_MESSAGE_LENGTH, MAX_CONVERSATION_ID_LENGTH
 from app.security import require_api_key
 
 logger = logging.getLogger(__name__)
@@ -26,7 +35,7 @@ router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[Depends(require_
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    conversation_id: str | None = Field(None, max_length=64)
+    conversation_id: str | None = Field(None, max_length=MAX_CONVERSATION_ID_LENGTH)
     message: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
     assistant: AssistantName = AssistantName.ADVISOR
 
@@ -74,11 +83,13 @@ def chat(
     steps: list[TraceStep] = []
     outcome = "closed"
     try:
-        for event in run_turn(client, db, profile, tools, history, body.message, steps):
+        for event in run_turn(client, db, profile, tools, history, body.message, steps, conversation_id):
             if isinstance(event, TextDelta):
                 yield ServerSentEvent(event="text", data={"text": event.text})
             elif isinstance(event, ToolCall):
                 yield ServerSentEvent(event="tool", data={"name": event.name})
+            elif isinstance(event, ChartRef):
+                yield ServerSentEvent(event="chart", data={"chart_id": event.chart_id})
             elif isinstance(event, Answer):
                 if not store.append_turn(conversation_id, len(history), body.message, event.text):
                     raise ChatError("conflict")

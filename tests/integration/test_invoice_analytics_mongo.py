@@ -229,7 +229,7 @@ def test_run_tool_analyze_invoices_returns_the_controllers_figures(invoices):
     direct = _analyze(invoices, group_by="customer", posted_from=date(2020, 1, 1))
 
     # Act
-    result = json.loads(run_tool(invoices.database, "analyze_invoices", tool_input))
+    result = json.loads(run_tool(invoices.database, "analyze_invoices", tool_input).content)
 
     # Assert
     assert result == json.loads(json.dumps(direct))

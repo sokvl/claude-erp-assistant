@@ -14,13 +14,14 @@ from app.assistant.chat import (
     MAX_MODEL_CALLS,
     TOOL_FAILURE_MESSAGE,
     Answer,
+    ChartRef,
     ChatError,
     TextDelta,
     ToolCall,
     build_request,
     run_turn,
 )
-from app.assistant.dispatch import ToolInputError
+from app.assistant.dispatch import ToolInputError, ToolOutput
 from app.assistant.profiles import ADVISOR, ADVISOR_MODEL, ANALYST, ANALYST_MODEL
 from app.assistant.prompts import ANALYST_PROMPT, SYSTEM_PROMPT
 
@@ -116,7 +117,7 @@ def _run(client, history=(), profile=ADVISOR):
 
 
 def _fail_tool(monkeypatch, error):
-    def failing_run_tool(db, name, tool_input):
+    def failing_run_tool(db, name, tool_input, conversation_id=None):
         raise error
 
     monkeypatch.setattr(chat, "run_tool", failing_run_tool)
@@ -133,9 +134,9 @@ def sleeps(monkeypatch):
 def tool_runs(monkeypatch):
     calls = []
 
-    def fake_run_tool(db, name, tool_input):
+    def fake_run_tool(db, name, tool_input, conversation_id=None):
         calls.append(name)
-        return TOOL_OUTPUT
+        return ToolOutput(TOOL_OUTPUT)
 
     monkeypatch.setattr(chat, "run_tool", fake_run_tool)
     return calls
@@ -638,3 +639,48 @@ def test_run_turn_model_call_step_carries_token_usage():
         "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0,
     }
+
+
+# A tool that produced an artifact announces it on the stream, so the page can show
+# the chart while the model goes on to write the answer that quotes its rows.
+def test_run_turn_tool_with_an_artifact_yields_a_chart_ref_before_the_answer(monkeypatch):
+    # Arrange
+    monkeypatch.setattr(chat, "run_tool", lambda *args: ToolOutput(TOOL_OUTPUT, "chart-1"))
+    client = FakeClient(_tool_round(_tool_use(name="chart_invoices")), _answer("Here it is"))
+
+    # Act
+    events = _run(client, profile=ANALYST)
+
+    # Assert
+    assert events == [
+        ToolCall("chart_invoices"),
+        ChartRef("chart-1"),
+        TextDelta("Here it is"),
+        Answer("Here it is", truncated=False),
+    ]
+
+
+def test_run_turn_tool_without_an_artifact_yields_no_chart_ref(tool_runs):
+    # Arrange
+    client = FakeClient(_tool_round(), _answer("Hi"))
+
+    # Act
+    events = _run(client)
+
+    # Assert
+    assert not any(isinstance(event, ChartRef) for event in events)
+
+
+# The conversation is what scopes a stored chart, so the id has to survive the trip
+# from the router through the agent loop to the tool.
+def test_run_turn_conversation_id_reaches_the_tool(monkeypatch):
+    # Arrange
+    seen = []
+    monkeypatch.setattr(chat, "run_tool", lambda db, name, tool_input, cid: seen.append(cid) or ToolOutput("{}"))
+    client = FakeClient(_tool_round(), _answer("Hi"))
+
+    # Act
+    list(run_turn(client, None, ADVISOR, [], [], "question", None, "conv-7"))
+
+    # Assert
+    assert seen == ["conv-7"]

@@ -272,9 +272,30 @@
 
   renderSuggestions();
 
+  const chartUrls = [];
+
+  async function addChart(chartId) {
+    const el = add("msg assistant chart", "");
+    try {
+      const response = await fetch(`/charts/${chartId}/image`, { headers: { "X-API-Key": keyInput.value } });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const url = URL.createObjectURL(await response.blob());
+      chartUrls.push(url);
+      const img = new Image();
+      img.alt = "Chart of the figures above";
+      img.onload = () => { log.scrollTop = log.scrollHeight; };
+      img.src = url;
+      el.appendChild(img);
+    } catch (err) {
+      el.remove();
+      addNote(`Could not load the chart: ${err.message}`, "error");
+    }
+  }
+
   function startConversation(note) {
     conversationId = null;
     stopSuggestions();
+    chartUrls.splice(0).forEach(URL.revokeObjectURL);
     log.innerHTML = "";
     addNote(note);
     renderSuggestions();
@@ -367,6 +388,11 @@
             stopThinking();
             if (data.name !== lastTool) addNote(`looking up: ${data.name}`, "tool");
             lastTool = data.name;
+          } else if (event === "chart") {
+            stopThinking();
+            bubble = null;
+            bubbleRaw = "";
+            addChart(data.chart_id);
           } else if (event === "text") {
             stopThinking();
             lastTool = null;

@@ -30,13 +30,14 @@ class FakeProducts:
 
 
 class FakeInvoices:
-    def __init__(self):
+    def __init__(self, currencies=()):
         self.aggregate_calls = []
         self.find_calls = []
+        self.currencies = list(currencies)
 
     def aggregate(self, pipeline, **kwargs):
         self.aggregate_calls.append(pipeline)
-        return iter([])
+        return iter(self.currencies)
 
     def find(self, **kwargs):
         self.find_calls.append(kwargs)
@@ -49,14 +50,22 @@ class FakeInvoices:
         return {"dates": {"postingDate": datetime(2019, 1, 2)}}
 
 
+class FakeCharts:
+    def __init__(self):
+        self.documents = []
+
+    def insert_one(self, document):
+        self.documents.append(document)
+
+
 @pytest.fixture
 def db():
-    return {"products": FakeProducts(), "invoices": FakeInvoices()}
+    return {"products": FakeProducts(), "invoices": FakeInvoices(), "charts": FakeCharts()}
 
 
 def test_run_tool_search_products_strips_internal_fields(db):
     # Arrange / Act
-    result = json.loads(run_tool(db, "search_products", {"category": "GPU"}))
+    result = json.loads(run_tool(db, "search_products", {"category": "GPU"}).content)
 
     # Assert
     assert result["items"] == [{"sku": "GPU-H100-80G", "listPrice": 27999.0}]
@@ -73,7 +82,7 @@ def test_run_tool_list_invoices_runs_the_filtered_page_query(db):
 
 def test_run_tool_list_invoices_serializes_dates_as_strings(db):
     # Arrange / Act
-    result = json.loads(run_tool(db, "list_invoices", {}))
+    result = json.loads(run_tool(db, "list_invoices", {}).content)
 
     # Assert
     assert result["items"][0]["dates"]["dueInDate"] == "2020-02-10 00:00:00"
@@ -81,7 +90,7 @@ def test_run_tool_list_invoices_serializes_dates_as_strings(db):
 
 def test_run_tool_analyze_invoices_returns_figures_with_as_of_and_coverage(db):
     # Arrange / Act
-    result = json.loads(run_tool(db, "analyze_invoices", {"group_by": "customer", "as_of": "2020-05-31"}))
+    result = json.loads(run_tool(db, "analyze_invoices", {"group_by": "customer", "as_of": "2020-05-31"}).content)
 
     # Assert
     assert (result["asOf"], result["groupBy"], result["coverage"], len(db["invoices"].aggregate_calls)) == (
@@ -92,9 +101,83 @@ def test_run_tool_analyze_invoices_returns_figures_with_as_of_and_coverage(db):
     )
 
 
+CHART_ROWS = [
+    {
+        "currency": "USD",
+        "groupCount": 2,
+        "rows": [
+            {"key": "0140105686", "label": "Acme", "invoiceCount": 3, "totalAmount": 900.0,
+             "averageAmount": 300.0, "openAmount": 400.0, "overdueAmount": 100.0, "averageDaysToPay": 12.0},
+            {"key": "0140105687", "label": "Globex", "invoiceCount": 1, "totalAmount": 300.0,
+             "averageAmount": 300.0, "openAmount": 0.0, "overdueAmount": 0.0, "averageDaysToPay": 9.0},
+        ],
+    }
+]
+
+
+# The model names a query, never the numbers: the chart is drawn from the rows the
+# aggregation returned, and the same rows come back so the answer can quote them.
+def test_run_tool_chart_invoices_stores_a_chart_and_returns_the_rows(db):
+    # Arrange
+    db["invoices"].currencies = CHART_ROWS
+
+    # Act
+    output = run_tool(db, "chart_invoices", {"chart_type": "bar", "group_by": "customer"}, "conv-1")
+
+    # Assert
+    result = json.loads(output.content)
+    [stored] = db["charts"].documents
+    assert output.artifact == result["chartId"] == stored["_id"]
+    assert result["currencies"] == CHART_ROWS
+    assert (stored["conversationId"], stored["title"]) == ("conv-1", "Invoiced by customer")
+
+
+def test_run_tool_chart_invoices_no_matching_invoices_returns_no_chart(db):
+    # Arrange: aggregate yields no currencies, so there is nothing to draw
+    # Act
+    output = run_tool(db, "chart_invoices", {"chart_type": "bar", "group_by": "customer"}, "conv-1")
+
+    # Assert
+    assert json.loads(output.content)["chartId"] is None
+    assert (output.artifact, db["charts"].documents) == (None, [])
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["search_products", "list_invoices", "analyze_invoices", "get_product_facets"],
+    ids=["search_products", "list_invoices", "analyze_invoices", "get_product_facets"],
+)
+def test_run_tool_non_chart_tools_report_no_artifact(db, name):
+    # Arrange / Act
+    output = run_tool(db, name, {})
+
+    # Assert
+    assert output.artifact is None
+
+
+@pytest.mark.parametrize(
+    ("tool_input", "expected_message"),
+    [
+        ({"chart_type": "pie", "group_by": "customer"}, "chart_type: Input should be 'line'"),
+        ({"chart_type": "line", "group_by": "customer"}, "needs group_by to be one of"),
+        ({"chart_type": "bar", "group_by": "customer", "metric": "units"}, "needs group_by to be one of"),
+        ({"group_by": "customer"}, "chart_type: Field required"),
+    ],
+    ids=["unknown_chart_type", "line_over_customers", "units_without_line_grain", "missing_chart_type"],
+)
+def test_run_tool_invalid_chart_input_never_queries_or_stores(db, tool_input, expected_message):
+    # Arrange / Act
+    with pytest.raises(ToolInputError) as raised:
+        run_tool(db, "chart_invoices", tool_input, "conv-1")
+
+    # Assert
+    assert expected_message in str(raised.value)
+    assert (db["invoices"].aggregate_calls, db["charts"].documents) == ([], [])
+
+
 def test_run_tool_get_product_facets_returns_sorted_vocabularies(db):
     # Arrange / Act
-    result = json.loads(run_tool(db, "get_product_facets", {}))
+    result = json.loads(run_tool(db, "get_product_facets", {}).content)
 
     # Assert
     assert result == {
