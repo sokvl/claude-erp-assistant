@@ -32,6 +32,11 @@ def analyze(case_id: str, question: str, params: dict[str, Any], figure: str, re
     return Case(case_id, (question,), tools=("analyze_invoices",), gold=gold, assistant="analyst")
 
 
+def chart(case_id: str, question: str, params: dict[str, Any], figure: str, results: str = "equal") -> Case:
+    gold = Gold(params, tool="chart_invoices", results=results, answer=None, figure=figure)
+    return Case(case_id, (question,), tools=("chart_invoices",), gold=gold, assistant="analyst")
+
+
 def refuse(case_id: str, question: str, assistant: str = "advisor") -> Case:
     return Case(case_id, (question,), refusal=True, tools=(), assistant=assistant)
 
@@ -114,6 +119,19 @@ CASES = (
         {"group_by": "category", "posted_from": "2020-01-01", "posted_to": "2020-12-31"},
         figure="totalAmount",
         results="covers",
+    ),
+    chart(
+        "analyst_chart_2019_trend",
+        "Show me our monthly invoiced amount for 2019 as a chart.",
+        {"group_by": "month", "posted_from": "2019-01-01", "posted_to": "2019-12-31", "chart_type": "line"},
+        figure="totalAmount",
+    ),
+    chart(
+        "analyst_chart_top_customers",
+        "Chart the top 5 customers by invoiced amount in 2020.",
+        {"group_by": "customer", "posted_from": "2020-01-01", "posted_to": "2020-12-31",
+         "limit": 5, "chart_type": "bar"},
+        figure="totalAmount",
     ),
     ask(
         "analyst_open_walmar",

@@ -3,7 +3,13 @@ import re
 from typing import Any
 
 from app.assistant.prompts import ANALYST_OUT_OF_SCOPE_REPLY, OUT_OF_SCOPE_REPLY
-from app.assistant.tools import ANALYZE_INVOICES, LIST_INVOICES, SEARCH_PRODUCTS, ListInvoicesInput
+from app.assistant.tools import (
+    ANALYZE_INVOICES,
+    CHART_INVOICES,
+    LIST_INVOICES,
+    SEARCH_PRODUCTS,
+    ListInvoicesInput,
+)
 from app.catalog.schemas import ProductSearchParams
 from app.catalog.service import search_catalog
 from app.invoices.schemas import InvoiceAnalyticsParams
@@ -13,12 +19,17 @@ from cases import Case, Gold
 
 TABLE = re.compile(r"^\s*\|.*\|\s*\n\s*\|[\s:|-]*-{3,}", re.MULTILINE)
 SKU = re.compile(r"\b[A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]+)+\b")
-ROW_TOOLS = (SEARCH_PRODUCTS, LIST_INVOICES, ANALYZE_INVOICES)
+ROW_TOOLS = (SEARCH_PRODUCTS, LIST_INVOICES, ANALYZE_INVOICES, CHART_INVOICES)
+ANALYTICS_TOOLS = (ANALYZE_INVOICES, CHART_INVOICES)
+CHART_ONLY_FIELDS = ("chart_type", "metric")
 REFUSALS = {"advisor": OUT_OF_SCOPE_REPLY, "analyst": ANALYST_OUT_OF_SCOPE_REPLY}
 
 
 def _analytics(db: Any, params: dict[str, Any]) -> dict[str, Any]:
-    return analyze_invoices(db["invoices"], InvoiceAnalyticsParams.model_validate(params))
+    # chart_invoices draws the rows analyze_invoices computes, so the same gold query
+    # grades both; only the drawing options have to come off first.
+    figures = {key: value for key, value in params.items() if key not in CHART_ONLY_FIELDS}
+    return analyze_invoices(db["invoices"], InvoiceAnalyticsParams.model_validate(figures))
 
 
 def _row_ids(result: dict[str, Any]) -> frozenset[str]:
@@ -29,7 +40,7 @@ def query_ids(db: Any, tool: str, params: dict[str, Any], expand: bool) -> froze
     if tool == LIST_INVOICES:
         items = list_invoices(db["invoices"], ListInvoicesInput.model_validate(params))["items"]
         return frozenset(item["invoiceId"] for item in items)
-    if tool == ANALYZE_INVOICES:
+    if tool in ANALYTICS_TOOLS:
         return _row_ids(_analytics(db, params))
     paging = {"page": 1, "page_size": MAX_PAGE_SIZE} if expand else {}
     items = search_catalog(db["products"], ProductSearchParams.model_validate({**params, **paging}))["items"]
@@ -42,7 +53,7 @@ def gold_ids(db: Any, gold: Gold) -> frozenset[str]:
 
 def output_ids(call: dict[str, Any]) -> frozenset[str]:
     output = json.loads(call["output"])
-    if call["name"] == ANALYZE_INVOICES:
+    if call["name"] in ANALYTICS_TOOLS:
         return _row_ids(output)
     key = "invoiceId" if call["name"] == LIST_INVOICES else "sku"
     return frozenset(item[key] for item in output.get("items", []))
@@ -73,6 +84,7 @@ def grade(
     failures += [f"[tool] {call['name']} {call['input']} rejected: {call['error']}" for call in calls if "error" in call]
     if case.gold:
         failures += _grade_asked(db, case.gold, calls)
+        failures += _grade_chart_type(case.gold, calls)
     if not final:
         return failures
 
@@ -122,6 +134,14 @@ def _grade_asked(db: Any, gold: Gold, calls: list[dict[str, Any]]) -> list[str]:
     if len(attempts) > 1 and matches(gold.results, combined, expected):
         return []
     return [f"[retrieval] gold {gold.params} ({gold.results}) -> {sorted(expected)}; asked: {'; '.join(attempts) or 'nothing'}"]
+
+
+def _grade_chart_type(gold: Gold, calls: list[dict[str, Any]]) -> list[str]:
+    wanted = gold.params.get("chart_type")
+    if gold.tool != CHART_INVOICES or wanted is None:
+        return []
+    drawn = [call["input"].get("chart_type") for call in calls if call["name"] == CHART_INVOICES]
+    return [f"[chart] expected chart_type {wanted}, drew {drawn}"] * (wanted not in drawn)
 
 
 def _grade_figures(db: Any, gold: Gold, answer: str) -> list[str]:
