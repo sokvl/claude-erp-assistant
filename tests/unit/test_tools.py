@@ -12,6 +12,8 @@ from app.assistant.tools import (
     SearchProductsInput,
 )
 from app.catalog.enums import Architecture, Brand, Category, MemoryType, SortField, SortOrder, UseCase
+from app.charts.enums import ChartMetric, ChartType
+from app.charts.schemas import ChartParams
 from app.invoices.enums import GroupBy, InvoiceSortField, InvoiceStatus
 from app.invoices.schemas import InvoiceAnalyticsParams
 
@@ -49,8 +51,12 @@ def test_search_products_tool_properties_match_search_input_fields():
 
 @pytest.mark.parametrize(
     ("tool", "input_model"),
-    [(LIST_INVOICES_TOOL, ListInvoicesInput), (ANALYZE_INVOICES_TOOL, InvoiceAnalyticsParams)],
-    ids=["list_invoices", "analyze_invoices"],
+    [
+        (LIST_INVOICES_TOOL, ListInvoicesInput),
+        (ANALYZE_INVOICES_TOOL, InvoiceAnalyticsParams),
+        (CHART_INVOICES_TOOL, ChartParams),
+    ],
+    ids=["list_invoices", "analyze_invoices", "chart_invoices"],
 )
 def test_invoice_tool_properties_match_input_model_fields(tool, input_model):
     # Arrange / Act
@@ -68,8 +74,12 @@ def test_invoice_tool_properties_match_input_model_fields(tool, input_model):
         (LIST_INVOICES_TOOL, "sort_order", SortOrder),
         (ANALYZE_INVOICES_TOOL, "status", InvoiceStatus),
         (ANALYZE_INVOICES_TOOL, "group_by", GroupBy),
+        (CHART_INVOICES_TOOL, "group_by", GroupBy),
+        (CHART_INVOICES_TOOL, "chart_type", ChartType),
+        (CHART_INVOICES_TOOL, "metric", ChartMetric),
     ],
-    ids=["list_status", "list_sort_by", "list_sort_order", "analyze_status", "analyze_group_by"],
+    ids=["list_status", "list_sort_by", "list_sort_order", "analyze_status", "analyze_group_by",
+         "chart_group_by", "chart_chart_type", "chart_metric"],
 )
 def test_invoice_tool_static_enums_match_str_enums(tool, field, enum_class):
     # Arrange / Act
@@ -81,8 +91,12 @@ def test_invoice_tool_static_enums_match_str_enums(tool, field, enum_class):
 
 @pytest.mark.parametrize(
     ("tool", "field"),
-    [(tool, field) for tool in (LIST_INVOICES_TOOL, ANALYZE_INVOICES_TOOL) for field in ("posted_from", "posted_to", "as_of")],
-    ids=[f"{tool}_{field}" for tool in ("list", "analyze") for field in ("posted_from", "posted_to", "as_of")],
+    [
+        (tool, field)
+        for tool in (LIST_INVOICES_TOOL, ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL)
+        for field in ("posted_from", "posted_to", "as_of")
+    ],
+    ids=[f"{tool}_{field}" for tool in ("list", "analyze", "chart") for field in ("posted_from", "posted_to", "as_of")],
 )
 def test_invoice_tool_date_fields_are_constrained_to_iso_dates(tool, field):
     # Arrange / Act
@@ -94,7 +108,10 @@ def test_invoice_tool_date_fields_are_constrained_to_iso_dates(tool, field):
 
 @pytest.mark.parametrize(
     ("tool", "input_model"),
-    [(LIST_INVOICES_TOOL, ListInvoicesInput), (ANALYZE_INVOICES_TOOL, InvoiceAnalyticsParams)],
+    [
+        (LIST_INVOICES_TOOL, ListInvoicesInput),
+        (ANALYZE_INVOICES_TOOL, InvoiceAnalyticsParams),
+    ],
     ids=["list_invoices", "analyze_invoices"],
 )
 def test_invoice_input_accepts_every_enum_value_and_default_the_tool_schema_offers(tool, input_model):
@@ -150,8 +167,8 @@ def test_tool_schema_uses_only_strict_supported_keywords(tool):
 
 @pytest.mark.parametrize(
     "tool",
-    [LIST_INVOICES_TOOL, ANALYZE_INVOICES_TOOL],
-    ids=["list_invoices", "analyze_invoices"],
+    [LIST_INVOICES_TOOL, ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL],
+    ids=["list_invoices", "analyze_invoices", "chart_invoices"],
 )
 def test_invoice_tool_schema_is_not_strict_so_no_filter_is_silently_dropped(tool):
     # Arrange: strict decoding emits optional properties only in schema order, so a filter the model reaches
