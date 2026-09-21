@@ -75,31 +75,15 @@ flowchart TB
 
 ## Features
 
-* **Tool use with one validation path.** `SearchProductsInput` subclasses the HTTP
-  `ProductSearchParams`, so model calls and REST requests share one Pydantic model. The model is
-  treated as an untrusted caller and its input is re-validated on every call.
-* **Strict *and* non-strict tool schemas, deliberately.** Product tools are `strict: true`.
-  Invoice tools are not: strict decoding emits optional properties in schema order, and a filter
-  the model reached for after a later one was silently dropped (measured live, Q1 dates vanished
-  and all time totals came back). Pydantic is the guard instead.
-* **Static vocabulary.** Filter values are `StrEnum`s rather than a live `distinct()`, so the tool
-  schema stays prompt cache stable and a typo in the data can never become a valid filter value.
-* **Prompt caching.** `cache_control` on the system block and at request top level; the analyst's
-  volatile "today's date" sits in a second, uncached block so the cached prefix never shifts.
-* **Streaming agent loop.** SSE `conversation → (text | tool | chart)* → done | error`, bounded at
-  six model calls per turn.
-* **An error taxonomy that respects what was already sent.** The SDK retries what is safely
-  repeatable; the app handles the rest. Mid stream failures retry *only if no text has streamed
-  yet*, because text already sent cannot be taken back. Every `stop_reason` maps to an outcome,
-  and a truncated `tool_use` is never executed.
-* **Self correcting tool errors.** Bad model input becomes an `is_error` tool_result describing
-  the problem, so the model fixes itself instead of the turn dying.
+* **Tool use with one validation path.**
+* **Strict *and* non-strict tool schemas, deliberately.** 
+* **Prompt caching.** 
+* **Streaming agent loop.** 
+* **An error taxonomy that respects what was already sent.**
+* **Self correcting tool errors.** B
 * **Adaptive thinking** on the analyst (`effort: medium`, 90 s read timeout).
-* **Token and cost tracking** into `chat_usage` with a per model price table, recorded in
-  `finally` even when the turn fails.
-* **Server rendered charts** from DB rows via `Figure` + `FigureCanvasAgg`, never `pyplot`, whose
-  global figure registry is not thread safe under FastAPI's threadpool. Stored as PNG in MongoDB
-  with a 30 day TTL.
+* **Token and cost tracking** 
+* **Server rendered charts**
 
 ## Tests and evals
 
