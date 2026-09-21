@@ -16,6 +16,9 @@ PURE_MODULES = [
     "app.invoices.enums",
     "app.invoices.query",
     "app.invoices.schemas",
+    "app.charts.enums",
+    "app.charts.schemas",
+    "app.charts.render",
 ]
 
 
