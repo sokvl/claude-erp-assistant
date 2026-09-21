@@ -11,6 +11,24 @@ Built while working toward the **Claude Certified Developer** certification. The
 vehicle; the point was tool use, prompt caching, streaming, evals and a real error taxonomy
 instead of a toy chat wrapper.
 
+## Demo
+
+The advisor searches the catalog and quotes SKUs and list prices exactly as returned, never
+naming a product it did not just retrieve.
+
+![Product lookup](media/lookup.gif)
+
+One `chart_invoices` call returns the rows *and* a rendered PNG, so the answer carries a table and
+a picture. USD and CAD get separate panels on separate scales; they are never added or compared.
+
+![Chart and table analysis](media/chart.gif)
+
+The advisor estimates the memory a workload needs, states the estimate, then proposes a
+configuration inside the budget and totals it from returned prices.
+
+![Recommended setup](media/propose_a_build.gif)
+
+
 ```mermaid
 flowchart TB
     UI["Browser · static/chat.html"]
@@ -54,22 +72,6 @@ flowchart TB
     class API ext
 ```
 
-## Demo
-
-The advisor searches the catalog and quotes SKUs and list prices exactly as returned, never
-naming a product it did not just retrieve.
-
-![Product lookup](media/lookup.gif)
-
-One `chart_invoices` call returns the rows *and* a rendered PNG, so the answer carries a table and
-a picture. USD and CAD get separate panels on separate scales; they are never added or compared.
-
-![Chart and table analysis](media/chart.gif)
-
-The advisor estimates the memory a workload needs, states the estimate, then proposes a
-configuration inside the budget and totals it from returned prices.
-
-![Recommended setup](media/propose_a_build.gif)
 
 ## Features
 
