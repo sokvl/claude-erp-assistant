@@ -25,8 +25,9 @@ def list_invoices(collection: Any, params: InvoiceListParams) -> dict[str, Any]:
 
 def analyze_invoices(collection: Any, params: InvoiceAnalyticsParams) -> dict[str, Any]:
     as_of = params.as_of or today_in_business_timezone()
+    invoice_filter = build_invoice_filter(params, as_of)
     pipeline = build_analytics_pipeline(
-        criteria=build_invoice_filter(params, as_of),
+        criteria=invoice_filter,
         group_by=params.group_by,
         as_of=as_of,
         limit=params.limit,
