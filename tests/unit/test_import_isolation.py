@@ -19,6 +19,7 @@ PURE_MODULES = [
     "app.charts.enums",
     "app.charts.schemas",
     "app.charts.render",
+    "app.utils.mongo",
 ]
 
 

@@ -2,16 +2,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from app.catalog.enums import SORT_PATHS, SortField, SortOrder
-
-
-def _range(minimum: float | None, maximum: float | None) -> dict[str, Any]:
-    bounds: dict[str, Any] = {}
-    # `is not None`, not truthiness: 0 is a legitimate bound.
-    if minimum is not None:
-        bounds["$gte"] = minimum
-    if maximum is not None:
-        bounds["$lte"] = maximum
-    return bounds
+from app.utils.mongo import range_filter
 
 
 def build_product_filter(
@@ -43,15 +34,15 @@ def build_product_filter(
     if use_cases:
         criteria["specs.useCases"] = {"$in": list(use_cases)}
 
-    vram = _range(min_vram_gb, max_vram_gb)
+    vram = range_filter(min_vram_gb, max_vram_gb)
     if vram:
         criteria["specs.vramGb"] = vram
 
-    fp16 = _range(min_fp16_tflops, None)
+    fp16 = range_filter(min_fp16_tflops, None)
     if fp16:
         criteria["specs.fp16TensorTflopsDense"] = fp16
 
-    price = _range(min_price, max_price)
+    price = range_filter(min_price, max_price)
     if price:
         criteria["listPrice"] = price
 

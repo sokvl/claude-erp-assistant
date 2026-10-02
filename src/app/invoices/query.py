@@ -6,6 +6,7 @@ from app.catalog.enums import SortOrder
 from app.invoices.enums import LINE_ITEM_FIELDS, PERIOD_UNITS, SORT_PATHS, GroupBy, InvoiceSortField, InvoiceStatus
 from app.invoices.schemas import InvoiceFilter
 from app.limits import DEFAULT_ANALYTICS_ROWS, MAX_ANALYTICS_ROWS
+from app.utils.mongo import range_filter
 
 INVOICE_PROJECTION = {
     "_id": 0,
@@ -23,15 +24,6 @@ INVOICE_PROJECTION = {
 MONEY_FIELDS = ("totalAmount", "averageAmount", "openAmount", "overdueAmount")
 
 
-def _range(minimum: Any, maximum: Any) -> dict[str, Any]:
-    bounds: dict[str, Any] = {}
-    if minimum is not None:
-        bounds["$gte"] = minimum
-    if maximum is not None:
-        bounds["$lte"] = maximum
-    return bounds
-
-
 def _start_of(day: date) -> datetime:
     return datetime.combine(day, time.min)
 
@@ -39,7 +31,7 @@ def _start_of(day: date) -> datetime:
 def build_invoice_filter(filters: InvoiceFilter, as_of: date) -> dict[str, Any]:
     criteria: dict[str, Any] = {}
 
-    posted = _range(
+    posted = range_filter(
         None if filters.posted_from is None else _start_of(filters.posted_from),
         None if filters.posted_to is None else datetime.combine(filters.posted_to, time.max),
     )
@@ -62,7 +54,7 @@ def build_invoice_filter(filters: InvoiceFilter, as_of: date) -> dict[str, Any]:
         criteria["isOpen"] = True
         criteria["dates.dueInDate"] = {"$lt": _start_of(as_of)}
 
-    amount = _range(filters.min_amount, filters.max_amount)
+    amount = range_filter(filters.min_amount, filters.max_amount)
     if amount:
         criteria["amounts.totalOpen"] = amount
 
