@@ -16,7 +16,7 @@ from app.assistant.tools import (
     SearchProductsInput,
 )
 from app.catalog import vocab
-from app.catalog.service import search_catalog
+from app.catalog.service import PRODUCT_COLLECTION, search_catalog
 from app.charts.schemas import ChartParams
 from app.charts.service import chart_analytics
 from app.charts.storage import CHART_COLLECTION
@@ -53,14 +53,14 @@ def run_tool(db: Database, name: str, tool_input: Any, conversation_id: str | No
 def _dispatch(db: Database, name: str, tool_input: Any, conversation_id: str | None) -> dict[str, Any]:
     if name == SEARCH_PRODUCTS:
         params = SearchProductsInput.model_validate(tool_input)
-        result = search_catalog(db["products"], params)
+        result = search_catalog(db[PRODUCT_COLLECTION], params)
         result["items"] = [
             {key: value for key, value in item.items() if key not in HIDDEN_PRODUCT_FIELDS}
             for item in result["items"]
         ]
         return result
     if name == GET_PRODUCT_FACETS:
-        return vocab.get_all_vocabularies(db["products"])
+        return vocab.get_all_vocabularies(db[PRODUCT_COLLECTION])
     if name == LIST_INVOICES:
         return list_invoices(db["invoices"], ListInvoicesInput.model_validate(tool_input))
     if name == ANALYZE_INVOICES:

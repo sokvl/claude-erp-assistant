@@ -5,6 +5,8 @@ from app.catalog.query import build_product_filter, build_search_pipeline
 from app.catalog.schemas import ProductSearchParams
 from app.limits import QUERY_TIMEOUT_MS
 
+PRODUCT_COLLECTION = "products"
+
 
 def search_products(
     collection: Any,
