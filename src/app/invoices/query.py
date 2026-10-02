@@ -24,15 +24,11 @@ INVOICE_PROJECTION = {
 MONEY_FIELDS = ("totalAmount", "averageAmount", "openAmount", "overdueAmount")
 
 
-def _start_of(day: date) -> datetime:
-    return datetime.combine(day, time.min)
-
-
 def build_invoice_filter(filters: InvoiceFilter, as_of: date) -> dict[str, Any]:
     criteria: dict[str, Any] = {}
 
     posted = range_filter(
-        None if filters.posted_from is None else _start_of(filters.posted_from),
+        None if filters.posted_from is None else datetime.combine(filters.posted_from, time.min),
         None if filters.posted_to is None else datetime.combine(filters.posted_to, time.max),
     )
     if posted:
@@ -52,7 +48,7 @@ def build_invoice_filter(filters: InvoiceFilter, as_of: date) -> dict[str, Any]:
         criteria["isOpen"] = False
     elif filters.status == InvoiceStatus.OVERDUE:
         criteria["isOpen"] = True
-        criteria["dates.dueInDate"] = {"$lt": _start_of(as_of)}
+        criteria["dates.dueInDate"] = {"$lt": datetime.combine(as_of, time.min)}
 
     amount = range_filter(filters.min_amount, filters.max_amount)
     if amount:
@@ -141,7 +137,7 @@ def build_analytics_pipeline(
 
     line_grain = group_by in LINE_ITEM_FIELDS
     labelled = group_by in (GroupBy.CUSTOMER, GroupBy.PRODUCT)
-    cutoff = _start_of(as_of)
+    cutoff = datetime.combine(as_of, time.max)
 
     kpis: dict[str, Any] = {
         "invoiceCount": {"$sum": 1},
