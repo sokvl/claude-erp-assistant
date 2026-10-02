@@ -7,8 +7,9 @@ from app.limits import QUERY_TIMEOUT_MS
 
 
 def list_invoices(collection: Any, params: InvoiceListParams) -> dict[str, Any]:
+    search_criteria = build_invoice_filter(params, params.as_of or date.today())
     query = build_list_query(
-        criteria=build_invoice_filter(params, params.as_of or date.today()),
+        criteria=search_criteria,
         sort_by=params.sort_by,
         order=params.sort_order,
         page=params.page,
