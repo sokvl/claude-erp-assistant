@@ -491,7 +491,7 @@ def test_build_request_pins_model_prompt_and_cache_breakpoints(profile, expected
 def test_run_turn_computes_the_date_once_so_every_call_of_a_tool_loop_shares_one_prefix(monkeypatch):
     # Arrange: the clock crosses midnight between the two model calls
     days = iter([date(2026, 9, 18), date(2026, 9, 19)])
-    monkeypatch.setattr(chat, "date", SimpleNamespace(today=lambda: next(days)))
+    monkeypatch.setattr(chat, "today_in_business_timezone", lambda: next(days))
     client = FakeClient(_tool_round(), _answer())
 
     # Act

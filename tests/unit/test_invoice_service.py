@@ -156,7 +156,7 @@ def test_analyze_invoices_every_query_has_a_timeout():
 )
 def test_invoice_service_as_of_defaults_to_today(monkeypatch, call, params, criteria_of):
     # Arrange
-    monkeypatch.setattr(service, "date", type("FixedDate", (), {"today": staticmethod(lambda: date(2026, 9, 18))}))
+    monkeypatch.setattr(service, "today_in_business_timezone", lambda: date(2026, 9, 18))
     collection = FakeInvoices([])
 
     # Act

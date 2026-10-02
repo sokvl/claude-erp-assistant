@@ -1,13 +1,13 @@
-from datetime import date
 from typing import Any
 
 from app.invoices.query import build_analytics_pipeline, build_invoice_filter, build_list_query
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceListParams
 from app.limits import QUERY_TIMEOUT_MS
+from app.utils.dates import today_in_business_timezone
 
 
 def list_invoices(collection: Any, params: InvoiceListParams) -> dict[str, Any]:
-    search_criteria = build_invoice_filter(params, params.as_of or date.today())
+    search_criteria = build_invoice_filter(params, params.as_of or today_in_business_timezone())
     query = build_list_query(
         criteria=search_criteria,
         sort_by=params.sort_by,
@@ -24,7 +24,7 @@ def list_invoices(collection: Any, params: InvoiceListParams) -> dict[str, Any]:
 
 
 def analyze_invoices(collection: Any, params: InvoiceAnalyticsParams) -> dict[str, Any]:
-    as_of = params.as_of or date.today()
+    as_of = params.as_of or today_in_business_timezone()
     pipeline = build_analytics_pipeline(
         criteria=build_invoice_filter(params, as_of),
         group_by=params.group_by,

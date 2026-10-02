@@ -16,6 +16,7 @@ from pymongo.errors import PyMongoError
 
 from app.assistant.dispatch import ToolInputError, run_tool
 from app.assistant.profiles import Profile
+from app.utils.dates import today_in_business_timezone
 
 MAX_MODEL_CALLS = 6
 MID_STREAM_RETRIES = 2
@@ -113,7 +114,7 @@ def run_turn(
     run_id = uuid4().hex[:8]
     outcome = "closed"
     try:
-        request = build_request(profile, tools, date.today())
+        request = build_request(profile, tools, today_in_business_timezone())
         yield from _run_turn(client, db, request, history, user_text, steps, conversation_id)
         outcome = "done"
     except ChatError as exc:
