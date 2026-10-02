@@ -137,7 +137,7 @@ def build_analytics_pipeline(
 
     line_grain = group_by in LINE_ITEM_FIELDS
     labelled = group_by in (GroupBy.CUSTOMER, GroupBy.PRODUCT)
-    cutoff = datetime.combine(as_of, time.max)
+    cutoff = datetime.combine(as_of, time.min)
 
     kpis: dict[str, Any] = {
         "invoiceCount": {"$sum": 1},
