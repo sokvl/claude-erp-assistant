@@ -1,10 +1,9 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import ValidationError
-from pymongo.database import Database
 
 from app.assistant.tools import (
     ANALYZE_INVOICES,
@@ -33,13 +32,17 @@ class ToolInputError(ValueError):
     pass
 
 
+class CollectionSource(Protocol):
+    def __getitem__(self, name: str) -> Any: ...
+
+
 @dataclass(frozen=True)
 class ToolOutput:
     content: str
     artifact: str | None = None
 
 
-def run_tool(db: Database, name: str, tool_input: Any, conversation_id: str | None = None) -> ToolOutput:
+def run_tool(db: CollectionSource, name: str, tool_input: Any, conversation_id: str | None = None) -> ToolOutput:
     logger.debug("tool %s called with %s", name, tool_input)
     try:
         result = _dispatch(db, name, tool_input, conversation_id)
@@ -50,7 +53,7 @@ def run_tool(db: Database, name: str, tool_input: Any, conversation_id: str | No
     return ToolOutput(content, result.get("chartId"))
 
 
-def _dispatch(db: Database, name: str, tool_input: Any, conversation_id: str | None) -> dict[str, Any]:
+def _dispatch(db: CollectionSource, name: str, tool_input: Any, conversation_id: str | None) -> dict[str, Any]:
     if name == SEARCH_PRODUCTS:
         params = SearchProductsInput.model_validate(tool_input)
         result = search_catalog(db[PRODUCT_COLLECTION], params)

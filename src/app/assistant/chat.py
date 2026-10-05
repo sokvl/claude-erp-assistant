@@ -11,14 +11,13 @@ from uuid import uuid4
 import anthropic
 import httpx2
 from anthropic.types import Message, ToolUseBlock
-from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
-from app.assistant.dispatch import ToolInputError, run_tool
+from app.assistant.dispatch import CollectionSource, ToolInputError, run_tool
 from app.assistant.profiles import Profile
 from app.utils.dates import today_in_business_timezone
 
-MAX_MODEL_CALLS = 6
+MAX_MODEL_CALLS = 6  # user -> model -> tool -> model -> tool -> ...; caps a runaway tool loop
 MID_STREAM_RETRIES = 2
 TIMEOUT = anthropic.Timeout(60.0, connect=5.0, read=30.0)
 
@@ -102,7 +101,7 @@ def build_request(profile: Profile, tools: Sequence[dict[str, Any]], today: date
 
 def run_turn(
     client: anthropic.Anthropic,
-    db: Database,
+    db: CollectionSource,
     profile: Profile,
     tools: Sequence[dict[str, Any]],
     history: Sequence[dict[str, Any]],
@@ -114,7 +113,8 @@ def run_turn(
     run_id = uuid4().hex[:8]
     outcome = "closed"
     try:
-        request = build_request(profile, tools, today_in_business_timezone())
+        today = today_in_business_timezone()
+        request = build_request(profile, tools, today)
         yield from _run_turn(client, db, request, history, user_text, steps, conversation_id)
         outcome = "done"
     except ChatError as exc:
@@ -129,7 +129,7 @@ def run_turn(
 
 def _run_turn(
     client: anthropic.Anthropic,
-    db: Database,
+    db: CollectionSource,
     request: dict[str, Any],
     history: Sequence[dict[str, Any]],
     user_text: str,
@@ -250,7 +250,7 @@ def _stream_once(
 
 
 def _tool_result(
-    db: Database,
+    db: CollectionSource,
     block: ToolUseBlock,
     steps: list[TraceStep],
     conversation_id: str | None,
