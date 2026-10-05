@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -52,6 +53,8 @@ def mongo_client():
     try:
         client.admin.command("ping")
     except PyMongoError:
+        if os.environ.get("REQUIRE_MONGO"):
+            pytest.fail("MongoDB not reachable on localhost:27017")
         pytest.skip("MongoDB not reachable on localhost:27017")
     yield client
     client.close()

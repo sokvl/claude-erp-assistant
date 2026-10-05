@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
+    branches: [main, dev]
   workflow_dispatch:
 
 concurrency:
@@ -62,14 +63,64 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       # -p no:cacheprovider keeps the runner from writing .pytest_cache.
-      # These tests skip themselves if mongo is unreachable, so fail loudly here
-      # instead of letting a broken service container pass as a green run.
       - name: Run integration tests
         run: pytest -m integration -p no:cacheprovider --no-header -rs
+        env:
+          REQUIRE_MONGO: "1"
 
-      - name: Fail if the suite skipped instead of running
+  image:
+    name: docker image
+    needs: [tests, integration]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            invoice-api:ci
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
         run: |
-          count=$(pytest -m integration --collect-only -q 2>/dev/null \
-            | awk -F': ' '/^tests\/.*: [0-9]+$/ {s+=$2} END {print s+0}')
-          echo "collected $count integration tests"
-          [ "$count" -gt 0 ] || { echo "no integration tests collected"; exit 1; }
+          docker run -d --name smoke -p 8000:8000 -e API_KEY=ci-smoke-test invoice-api:ci
+          for _ in $(seq 20); do
+            curl -fsS -o /dev/null http://localhost:8000/ && exit 0
+            sleep 1
+          done
+          docker logs smoke
+          exit 1
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: github.event_name == 'push'
+        run: docker push --all-tags ${{ env.IMAGE }}
