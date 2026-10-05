@@ -25,6 +25,13 @@ by conversation:
   newest first. createdAt descends in the query, which an ascending index
   serves by walking it backwards.
 
+pending_actions - a close request the analyst raised and a human has not decided
+yet. Read back only by `_id`, which is always indexed, so the TTL index is the
+only one declared: it is the lifecycle, not an optimisation. Nothing else prunes
+the collection, so every pending action must carry `expiresAt`. Deciding also
+checks `expiresAt` in its filter, because the TTL sweep runs about once a minute
+rather than exactly on expiry.
+
 products - 52 documents fit in one storage page, where a collection scan beats
 any index lookup, and every spec field lives on the 11 GPUs that `category`
 already isolates. (category, listPrice) is kept for the primary shape: a
@@ -45,6 +52,10 @@ INVOICE_INDEXES = [
 CHART_INDEXES = [
     IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
     IndexModel([("conversationId", ASCENDING), ("createdAt", ASCENDING)]),
+]
+
+PENDING_ACTION_INDEXES = [
+    IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
 ]
 
 PRODUCT_INDEXES = [

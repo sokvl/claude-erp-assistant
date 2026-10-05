@@ -20,7 +20,7 @@ from datetime import datetime
 import pandas as pd
 from pymongo import MongoClient, UpdateOne
 
-from indexes import CHART_INDEXES, INVOICE_INDEXES, sync_indexes
+from indexes import CHART_INDEXES, INVOICE_INDEXES, PENDING_ACTION_INDEXES, sync_indexes
 
 
 def parse_yyyymmdd(series: pd.Series) -> pd.Series:
@@ -97,6 +97,7 @@ def main():
     collection = database[args.collection]
     sync_indexes(collection, INVOICE_INDEXES)
     sync_indexes(database["charts"], CHART_INDEXES)
+    sync_indexes(database["pending_actions"], PENDING_ACTION_INDEXES)
 
     start = datetime.now()
     total = 0
