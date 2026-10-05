@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Any
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.assistant.profiles import AssistantName
 from app.catalog.enums import Architecture, Brand, Category, MemoryType, SortField, SortOrder, UseCase
@@ -14,6 +14,7 @@ from app.limits import (
     DEFAULT_TOOL_PAGE_SIZE,
     MAX_AMOUNT,
     MAX_ANALYTICS_ROWS,
+    MAX_CLOSE_REASON_LENGTH,
     MAX_PAGE,
     MAX_PRICE,
     MAX_TEXT_LENGTH,
@@ -28,6 +29,7 @@ GET_PRODUCT_FACETS = "get_product_facets"
 LIST_INVOICES = "list_invoices"
 ANALYZE_INVOICES = "analyze_invoices"
 CHART_INVOICES = "chart_invoices"
+CLOSE_INVOICE = "close_invoice"
 
 
 class SearchProductsInput(ProductSearchParams):
@@ -36,6 +38,13 @@ class SearchProductsInput(ProductSearchParams):
 
 class ListInvoicesInput(InvoiceListParams):
     page_size: int = Field(DEFAULT_TOOL_PAGE_SIZE, ge=1, le=MAX_TOOL_PAGE_SIZE)
+
+
+class CloseInvoiceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    invoice_id: str = Field(max_length=MAX_TEXT_LENGTH)
+    reason: str = Field(max_length=MAX_CLOSE_REASON_LENGTH)
 
 
 SEARCH_PRODUCTS_DESCRIPTION = """
@@ -109,6 +118,17 @@ Do not:
 - Use it for a single figure with no grouping, unless chart_type=stacked; one number is not a chart.
 - Claim a chart when chartId is null; that means no invoices matched, so answer in text and say so.
 - Describe the picture, its colours or its axes, or treat it as a source of figures."""
+
+CLOSE_INVOICE_DESCRIPTION = """Ask a human to close an open invoice - for a wire received off-system, a manual reconciliation, or a written-off balance. This does not close it. Returns {status, pendingActionId, invoiceId, consequence}; status is "awaiting_approval", and the employee approves or rejects the request with buttons shown under your answer. consequence has currentAmountOpen, currency, customerNumber and customerName.
+
+Use it only when the employee explicitly asks to close, write off or manually settle a specific invoice. Check with list_invoices first that the invoice is open.
+
+After calling, state the invoice, the amount and currency from consequence, and the reason you submitted, and say it closes only once the employee approves it. To learn later whether an invoice closed, call list_invoices: closedAt and closedReason are set once it has.
+
+Do not:
+- Say an invoice is closed on the basis of this tool's result.
+- Call it twice for the same invoice, including after the employee rejected the request.
+- Call it to record a normal payment; payments are recorded outside this system and isOpen reflects them."""
 
 
 def _search_properties() -> dict[str, Any]:
@@ -341,7 +361,36 @@ ANALYZE_INVOICES_TOOL = _invoice_tool(ANALYZE_INVOICES, ANALYZE_INVOICES_DESCRIP
 CHART_INVOICES_TOOL = _invoice_tool(CHART_INVOICES, CHART_INVOICES_DESCRIPTION, _chart_invoices_properties())
 
 
+def _close_invoice_properties() -> dict[str, Any]:
+    return {
+        "invoice_id": {
+            "type": "string",
+            "description": f"invoiceId exactly as returned by list_invoices, at most {MAX_TEXT_LENGTH} characters.",
+        },
+        "reason": {
+            "type": "string",
+            "description": (
+                f"Why the invoice should be closed, at most {MAX_CLOSE_REASON_LENGTH} characters. "
+                "Shown to the employee who approves it."
+            ),
+        },
+    }
+
+
+CLOSE_INVOICE_TOOL: dict[str, Any] = {
+    "name": CLOSE_INVOICE,
+    "description": CLOSE_INVOICE_DESCRIPTION,
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": _close_invoice_properties(),
+        "required": ["invoice_id", "reason"],
+        "additionalProperties": False,
+    },
+}
+
+
 TOOLS: Mapping[AssistantName, list[dict[str, Any]]] = {
     AssistantName.ADVISOR: [PRODUCT_FACETS_TOOL, SEARCH_PRODUCTS_TOOL],
-    AssistantName.ANALYST: [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, LIST_INVOICES_TOOL],
+    AssistantName.ANALYST: [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, CLOSE_INVOICE_TOOL, LIST_INVOICES_TOOL],
 }

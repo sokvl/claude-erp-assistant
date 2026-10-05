@@ -13,6 +13,7 @@ from app.assistant.chat import (
     Answer,
     ChartRef,
     ChatError,
+    PendingActionRef,
     TextDelta,
     ToolCall,
     TraceStep,
@@ -90,6 +91,15 @@ def chat(
                 yield ServerSentEvent(event="tool", data={"name": event.name})
             elif isinstance(event, ChartRef):
                 yield ServerSentEvent(event="chart", data={"chart_id": event.chart_id})
+            elif isinstance(event, PendingActionRef):
+                yield ServerSentEvent(
+                    event="confirmation_required",
+                    data={
+                        "pending_action_id": event.pending_action_id,
+                        "invoice_id": event.invoice_id,
+                        "consequence": event.consequence,
+                    },
+                )
             elif isinstance(event, Answer):
                 if not store.append_turn(conversation_id, len(history), body.message, event.text):
                     raise ChatError("conflict")

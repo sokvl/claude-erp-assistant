@@ -16,6 +16,7 @@ from app.assistant.chat import (
     Answer,
     ChartRef,
     ChatError,
+    PendingActionRef,
     TextDelta,
     ToolCall,
     build_request,
@@ -24,6 +25,7 @@ from app.assistant.chat import (
 from app.assistant.dispatch import ToolInputError, ToolOutput
 from app.assistant.profiles import ADVISOR, ADVISOR_MODEL, ANALYST, ANALYST_MODEL
 from app.assistant.prompts import ANALYST_PROMPT, SYSTEM_PROMPT
+from app.invoices.pending_actions import PendingAction
 
 REQUEST = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
 TOOL_OUTPUT = '{"items":[]}'
@@ -658,6 +660,27 @@ def test_run_turn_tool_with_an_artifact_yields_a_chart_ref_before_the_answer(mon
         TextDelta("Here it is"),
         Answer("Here it is", truncated=False),
     ]
+
+
+# A close request is announced so the page can show Approve/Reject, and the turn ends
+# right after the model's answer: nothing waits for the decision, which arrives over REST.
+def test_run_turn_tool_with_a_pending_action_yields_a_pending_action_ref_without_waiting(monkeypatch):
+    # Arrange
+    pending = PendingAction("action-1", "1930438491", {"currency": "USD", "currentAmountOpen": 1234.5})
+    monkeypatch.setattr(chat, "run_tool", lambda *args: ToolOutput(TOOL_OUTPUT, pending_action=pending))
+    client = FakeClient(_tool_round(_tool_use(name="close_invoice")), _answer("Approve it below"))
+
+    # Act
+    events = _run(client, profile=ANALYST)
+
+    # Assert
+    assert events == [
+        ToolCall("close_invoice"),
+        PendingActionRef("action-1", "1930438491", {"currency": "USD", "currentAmountOpen": 1234.5}),
+        TextDelta("Approve it below"),
+        Answer("Approve it below", truncated=False),
+    ]
+    assert len(client.requests) == 2
 
 
 def test_run_turn_tool_without_an_artifact_yields_no_chart_ref(tool_runs):
