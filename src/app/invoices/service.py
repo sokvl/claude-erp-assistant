@@ -1,6 +1,13 @@
+from datetime import UTC, datetime
 from typing import Any
 
-from app.invoices.query import build_analytics_pipeline, build_invoice_filter, build_list_query
+from app.invoices.pending_actions import save_pending_action
+from app.invoices.query import (
+    INVOICE_PROJECTION,
+    build_analytics_pipeline,
+    build_invoice_filter,
+    build_list_query,
+)
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceListParams
 from app.limits import QUERY_TIMEOUT_MS
 from app.utils.dates import today_in_business_timezone
@@ -39,6 +46,41 @@ def analyze_invoices(collection: Any, params: InvoiceAnalyticsParams) -> dict[st
         "coverage": _coverage(collection),
         "currencies": list(collection.aggregate(pipeline, maxTimeMS=QUERY_TIMEOUT_MS)),
     }
+
+
+def request_close(
+    invoices: Any,
+    pending_actions: Any,
+    invoice_id: str,
+    reason: str,
+    conversation_id: str | None,
+) -> dict[str, Any]:
+    invoice = invoices.find_one({"_id": invoice_id}, INVOICE_PROJECTION, max_time_ms=QUERY_TIMEOUT_MS)
+    if invoice is None:
+        raise ValueError(f"No invoice {invoice_id!r} found")
+    if not invoice["isOpen"]:
+        raise ValueError(f"Invoice {invoice_id!r} is not open; nothing to close")
+    consequence = {
+        "currentAmountOpen": invoice["amounts"]["totalOpen"],
+        "currency": invoice["currency"],
+        "customerNumber": invoice["customer"]["number"],
+        "customerName": invoice["customer"]["name"],
+    }
+    action_id = save_pending_action(pending_actions, conversation_id, invoice_id, reason, consequence)
+    return {
+        "status": "awaiting_approval",
+        "pendingActionId": action_id,
+        "invoiceId": invoice_id,
+        "consequence": consequence,
+    }
+
+
+def close_invoice(collection: Any, invoice_id: str, reason: str) -> bool:
+    result = collection.update_one(
+        {"_id": invoice_id, "isOpen": True},
+        {"$set": {"isOpen": False, "closedAt": datetime.now(UTC), "closedReason": reason}},
+    )
+    return result.modified_count > 0
 
 
 def _coverage(collection: Any) -> dict[str, str | None]:

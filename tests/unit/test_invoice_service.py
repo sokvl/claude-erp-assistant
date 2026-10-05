@@ -1,10 +1,11 @@
 from datetime import date, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from app.invoices import service
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceListParams
-from app.invoices.service import analyze_invoices, list_invoices
+from app.invoices.service import analyze_invoices, close_invoice, list_invoices
 from app.limits import QUERY_TIMEOUT_MS
 
 CURRENCIES = [{"currency": "USD", "groupCount": 1, "rows": [{"invoiceCount": 2, "totalAmount": 30.0}]}]
@@ -164,3 +165,49 @@ def test_invoice_service_as_of_defaults_to_today(monkeypatch, call, params, crit
 
     # Assert
     assert criteria_of(collection)["dates.dueInDate"] == {"$lt": datetime(2026, 9, 18)}
+
+
+class InvoiceStore:
+    def __init__(self, *documents):
+        self.documents = {document["_id"]: dict(document) for document in documents}
+
+    def update_one(self, criteria, update):
+        document = self.documents.get(criteria["_id"])
+        matched = document is not None and document["isOpen"] == criteria["isOpen"]
+        if matched:
+            document.update(update["$set"])
+        return SimpleNamespace(modified_count=int(matched))
+
+
+# isOpen: True is part of the filter, so approving twice, or approving an invoice that
+# got paid meanwhile, changes nothing and keeps the first closedAt.
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ({"_id": "1930438491", "isOpen": True}, (True, "wire received")),
+        ({"_id": "1930438491", "isOpen": False, "closedReason": "paid by card"}, (False, "paid by card")),
+    ],
+    ids=["open_invoice", "already_closed"],
+)
+def test_close_invoice_closes_only_an_open_invoice(stored, expected):
+    # Arrange
+    collection = InvoiceStore(stored)
+
+    # Act
+    closed = close_invoice(collection, "1930438491", "wire received")
+
+    # Assert
+    document = collection.documents["1930438491"]
+    assert (closed, document["closedReason"]) == expected
+    assert document["isOpen"] is False
+
+
+def test_close_invoice_unknown_id_reports_nothing_closed():
+    # Arrange
+    collection = InvoiceStore()
+
+    # Act
+    closed = close_invoice(collection, "404", "wire received")
+
+    # Assert
+    assert closed is False
