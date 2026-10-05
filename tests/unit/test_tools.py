@@ -4,10 +4,12 @@ from app.assistant.profiles import AssistantName
 from app.assistant.tools import (
     ANALYZE_INVOICES_TOOL,
     CHART_INVOICES_TOOL,
+    CLOSE_INVOICE_TOOL,
     LIST_INVOICES_TOOL,
     PRODUCT_FACETS_TOOL,
     SEARCH_PRODUCTS_TOOL,
     TOOLS,
+    CloseInvoiceInput,
     ListInvoicesInput,
     SearchProductsInput,
 )
@@ -55,8 +57,9 @@ def test_search_products_tool_properties_match_search_input_fields():
         (LIST_INVOICES_TOOL, ListInvoicesInput),
         (ANALYZE_INVOICES_TOOL, InvoiceAnalyticsParams),
         (CHART_INVOICES_TOOL, ChartParams),
+        (CLOSE_INVOICE_TOOL, CloseInvoiceInput),
     ],
-    ids=["list_invoices", "analyze_invoices", "chart_invoices"],
+    ids=["list_invoices", "analyze_invoices", "chart_invoices", "close_invoice"],
 )
 def test_invoice_tool_properties_match_input_model_fields(tool, input_model):
     # Arrange / Act
@@ -150,8 +153,8 @@ def test_search_products_tool_enums_match_str_enums(field, enum_class):
 
 @pytest.mark.parametrize(
     "tool",
-    [SEARCH_PRODUCTS_TOOL, PRODUCT_FACETS_TOOL],
-    ids=["search_products", "get_product_facets"],
+    [SEARCH_PRODUCTS_TOOL, PRODUCT_FACETS_TOOL, CLOSE_INVOICE_TOOL],
+    ids=["search_products", "get_product_facets", "close_invoice"],
 )
 def test_tool_schema_uses_only_strict_supported_keywords(tool):
     # Arrange / Act
@@ -163,6 +166,17 @@ def test_tool_schema_uses_only_strict_supported_keywords(tool):
         [f"{path}.{key}" for path, node in nodes for key in node if key in STRICT_UNSUPPORTED_KEYWORDS],
         [path for path, node in nodes if node.get("type") == "object" and node.get("additionalProperties") is not False],
     ) == (True, [], [])
+
+
+def test_close_invoice_tool_requires_every_field_so_strict_decoding_cannot_drop_one():
+    # Arrange: strict decoding may omit an optional property; both are mandatory for a close request
+    schema = CLOSE_INVOICE_TOOL["input_schema"]
+
+    # Act
+    required = schema["required"]
+
+    # Assert
+    assert required == list(schema["properties"]) == list(CloseInvoiceInput.model_fields)
 
 
 @pytest.mark.parametrize(
@@ -227,8 +241,8 @@ def test_search_products_input_accepts_every_enum_value_the_tool_schema_offers()
     ("assistant", "expected"),
     [
         (AssistantName.ADVISOR, [PRODUCT_FACETS_TOOL, SEARCH_PRODUCTS_TOOL]),
-        (AssistantName.ANALYST, [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, LIST_INVOICES_TOOL]),
-        ("analyst", [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, LIST_INVOICES_TOOL]),
+        (AssistantName.ANALYST, [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, CLOSE_INVOICE_TOOL, LIST_INVOICES_TOOL]),
+        ("analyst", [ANALYZE_INVOICES_TOOL, CHART_INVOICES_TOOL, CLOSE_INVOICE_TOOL, LIST_INVOICES_TOOL]),
     ],
     ids=["advisor", "analyst", "analyst_plain_string"],
 )

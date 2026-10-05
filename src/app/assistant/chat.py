@@ -13,7 +13,7 @@ import httpx2
 from anthropic.types import Message, ToolUseBlock
 from pymongo.errors import PyMongoError
 
-from app.assistant.dispatch import CollectionSource, ToolInputError, run_tool
+from app.assistant.dispatch import CollectionSource, ToolInputError, ToolOutput, run_tool
 from app.assistant.profiles import Profile
 from app.utils.dates import today_in_business_timezone
 
@@ -56,6 +56,13 @@ class ChartRef:
 
 
 @dataclass(frozen=True)
+class PendingActionRef:
+    pending_action_id: str
+    invoice_id: str
+    consequence: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class Answer:
     text: str
     truncated: bool
@@ -77,7 +84,7 @@ class ChatError(Exception):
         self.message = ERROR_MESSAGES[code]
 
 
-ChatEvent = TextDelta | ToolCall | ChartRef | Answer
+ChatEvent = TextDelta | ToolCall | ChartRef | PendingActionRef | Answer
 
 
 @cache
@@ -154,9 +161,12 @@ def _run_turn(
             results = []
             for block in tool_uses:
                 yield ToolCall(block.name)
-                result, artifact = _tool_result(db, block, steps, conversation_id)
-                if artifact:
-                    yield ChartRef(artifact)
+                result, output = _tool_result(db, block, steps, conversation_id)
+                if output and output.chart_id:
+                    yield ChartRef(output.chart_id)
+                if output and output.pending_action:
+                    pending = output.pending_action
+                    yield PendingActionRef(pending.action_id, pending.invoice_id, pending.consequence)
                 results.append(result)
             messages = [
                 *messages,
@@ -254,7 +264,7 @@ def _tool_result(
     block: ToolUseBlock,
     steps: list[TraceStep],
     conversation_id: str | None,
-) -> tuple[dict[str, Any], str | None]:
+) -> tuple[dict[str, Any], ToolOutput | None]:
     name = f"tool {block.name}"
     started_at = time.perf_counter()
     try:
@@ -276,7 +286,7 @@ def _tool_result(
             "is_error": True,
         }, None
     _record(steps, name, "ok", started_at, f"{len(output.content)} chars")
-    return {"type": "tool_result", "tool_use_id": block.id, "content": output.content}, output.artifact
+    return {"type": "tool_result", "tool_use_id": block.id, "content": output.content}, output
 
 
 def _record(

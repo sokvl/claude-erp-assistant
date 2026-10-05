@@ -140,6 +140,7 @@
     background: var(--panel-strong);
     border: 1px solid var(--border);
   }
+  .confirm-actions { display: flex; gap: 8px; margin-top: 10px; }
   .note { align-self: flex-start; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--muted); }
   .note.tool { color: var(--tool); }
   .note.error { color: var(--error); font-weight: 500; }
@@ -331,6 +332,57 @@
     return el;
   }
 
+  function addConfirmation(actionId, invoiceId, consequence) {
+    const el = document.createElement("div");
+    el.className = "msg assistant confirm";
+    el.innerHTML = `
+      <div>Close invoice <strong></strong>? <span class="amount"></span> open for <span class="who"></span>.</div>
+      <div class="confirm-actions">
+        <button type="button" class="primary approve">Approve</button>
+        <button type="button" class="reject">Reject</button>
+      </div>`;
+    el.querySelector("strong").textContent = invoiceId;
+    el.querySelector(".amount").textContent =
+      `${consequence.currency} ${consequence.currentAmountOpen.toLocaleString()}`;
+    el.querySelector(".who").textContent = consequence.customerName;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    el.querySelector(".approve").addEventListener("click", () => decide(actionId, invoiceId, "approve", el));
+    el.querySelector(".reject").addEventListener("click", () => decide(actionId, invoiceId, "reject", el));
+  }
+
+  function describeDecision(invoiceId, body) {
+    if (body.status === "rejected") return `Close of invoice ${invoiceId} rejected.`;
+    if (body.invoiceClosed) return `Invoice ${invoiceId} closed.`;
+    return `Invoice ${invoiceId} was already closed.`;
+  }
+
+  async function decide(actionId, invoiceId, verb, el) {
+    const buttons = el.querySelectorAll("button");
+    buttons.forEach((b) => (b.disabled = true));
+    try {
+      const response = await fetch(`/pending-actions/${actionId}/${verb}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": keyInput.value },
+        body: JSON.stringify({}),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (response.ok) {
+        el.querySelector(".confirm-actions").remove();
+        addNote(describeDecision(invoiceId, body));
+      } else if (response.status === 409) {
+        el.querySelector(".confirm-actions").remove();
+        addNote("This request expired or was already decided.", "error");
+      } else {
+        buttons.forEach((b) => (b.disabled = false));
+        addNote(`HTTP ${response.status}: ${body.detail ?? "failed"}`, "error");
+      }
+    } catch (err) {
+      buttons.forEach((b) => (b.disabled = false));
+      addNote(`Request failed: ${err.message}`, "error");
+    }
+  }
+
   document.getElementById("form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const message = input.value.trim();
@@ -393,6 +445,11 @@
             bubble = null;
             bubbleRaw = "";
             addChart(data.chart_id);
+          } else if (event === "confirmation_required") {
+            stopThinking();
+            bubble = null;
+            bubbleRaw = "";
+            addConfirmation(data.pending_action_id, data.invoice_id, data.consequence);
           } else if (event === "text") {
             stopThinking();
             lastTool = null;

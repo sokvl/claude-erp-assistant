@@ -8,9 +8,11 @@ from pydantic import ValidationError
 from app.assistant.tools import (
     ANALYZE_INVOICES,
     CHART_INVOICES,
+    CLOSE_INVOICE,
     GET_PRODUCT_FACETS,
     LIST_INVOICES,
     SEARCH_PRODUCTS,
+    CloseInvoiceInput,
     ListInvoicesInput,
     SearchProductsInput,
 )
@@ -19,8 +21,9 @@ from app.catalog.service import PRODUCT_COLLECTION, search_catalog
 from app.charts.schemas import ChartParams
 from app.charts.service import chart_analytics
 from app.charts.storage import CHART_COLLECTION
+from app.invoices.pending_actions import PENDING_ACTIONS_COLLECTION, PendingAction
 from app.invoices.schemas import InvoiceAnalyticsParams
-from app.invoices.service import analyze_invoices, list_invoices
+from app.invoices.service import analyze_invoices, list_invoices, request_close
 
 HIDDEN_PRODUCT_FIELDS = frozenset({"_id", "tier"})
 
@@ -39,7 +42,8 @@ class CollectionSource(Protocol):
 @dataclass(frozen=True)
 class ToolOutput:
     content: str
-    artifact: str | None = None
+    chart_id: str | None = None
+    pending_action: PendingAction | None = None
 
 
 def run_tool(db: CollectionSource, name: str, tool_input: Any, conversation_id: str | None = None) -> ToolOutput:
@@ -50,7 +54,10 @@ def run_tool(db: CollectionSource, name: str, tool_input: Any, conversation_id: 
         raise ToolInputError(_describe(exc)) from exc
     content = json.dumps(result, default=str, separators=(",", ":"), ensure_ascii=False)
     logger.debug("tool %s returned %s", name, content)
-    return ToolOutput(content, result.get("chartId"))
+    pending_action = None
+    if action_id := result.get("pendingActionId"):
+        pending_action = PendingAction(action_id, result["invoiceId"], result["consequence"])
+    return ToolOutput(content, result.get("chartId"), pending_action)
 
 
 def _dispatch(db: CollectionSource, name: str, tool_input: Any, conversation_id: str | None) -> dict[str, Any]:
@@ -75,6 +82,18 @@ def _dispatch(db: CollectionSource, name: str, tool_input: Any, conversation_id:
             ChartParams.model_validate(tool_input),
             conversation_id,
         )
+    if name == CLOSE_INVOICE:
+        params = CloseInvoiceInput.model_validate(tool_input)
+        try:
+            return request_close(
+                db["invoices"],
+                db[PENDING_ACTIONS_COLLECTION],
+                params.invoice_id,
+                params.reason,
+                conversation_id,
+            )
+        except ValueError as exc:
+            raise ToolInputError(str(exc)) from exc
     raise ToolInputError(f"Unknown tool: {name}")
 
 

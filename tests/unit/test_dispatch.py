@@ -34,6 +34,7 @@ class FakeInvoices:
         self.aggregate_calls = []
         self.find_calls = []
         self.currencies = list(currencies)
+        self.by_id = {}
 
     def aggregate(self, pipeline, **kwargs):
         self.aggregate_calls.append(pipeline)
@@ -46,11 +47,13 @@ class FakeInvoices:
     def count_documents(self, criteria, **kwargs):
         return 1
 
-    def find_one(self, *args, **kwargs):
+    def find_one(self, criteria=None, *args, **kwargs):
+        if criteria and "_id" in criteria:
+            return self.by_id.get(criteria["_id"])
         return {"dates": {"postingDate": datetime(2019, 1, 2)}}
 
 
-class FakeCharts:
+class FakeInserts:
     def __init__(self):
         self.documents = []
 
@@ -58,9 +61,23 @@ class FakeCharts:
         self.documents.append(document)
 
 
+OPEN_INVOICE = {
+    "invoiceId": "1930438491",
+    "currency": "USD",
+    "isOpen": True,
+    "amounts": {"totalOpen": 1234.5},
+    "customer": {"number": "0200769623", "name": "WAL-MART"},
+}
+
+
 @pytest.fixture
 def db():
-    return {"products": FakeProducts(), "invoices": FakeInvoices(), "charts": FakeCharts()}
+    return {
+        "products": FakeProducts(),
+        "invoices": FakeInvoices(),
+        "charts": FakeInserts(),
+        "pending_actions": FakeInserts(),
+    }
 
 
 def test_run_tool_search_products_strips_internal_fields(db):
@@ -127,7 +144,7 @@ def test_run_tool_chart_invoices_stores_a_chart_and_returns_the_rows(db):
     # Assert
     result = json.loads(output.content)
     [stored] = db["charts"].documents
-    assert output.artifact == result["chartId"] == stored["_id"]
+    assert output.chart_id == result["chartId"] == stored["_id"]
     assert result["currencies"] == CHART_ROWS
     assert (stored["conversationId"], stored["title"]) == ("conv-1", "Invoiced by customer")
 
@@ -139,7 +156,7 @@ def test_run_tool_chart_invoices_no_matching_invoices_returns_no_chart(db):
 
     # Assert
     assert json.loads(output.content)["chartId"] is None
-    assert (output.artifact, db["charts"].documents) == (None, [])
+    assert (output.chart_id, db["charts"].documents) == (None, [])
 
 
 @pytest.mark.parametrize(
@@ -147,12 +164,62 @@ def test_run_tool_chart_invoices_no_matching_invoices_returns_no_chart(db):
     ["search_products", "list_invoices", "analyze_invoices", "get_product_facets"],
     ids=["search_products", "list_invoices", "analyze_invoices", "get_product_facets"],
 )
-def test_run_tool_non_chart_tools_report_no_artifact(db, name):
+def test_run_tool_read_only_tools_report_no_chart_and_no_pending_action(db, name):
     # Arrange / Act
     output = run_tool(db, name, {})
 
     # Assert
-    assert output.artifact is None
+    assert (output.chart_id, output.pending_action) == (None, None)
+
+
+# The model can only ask: the invoice stays open until the employee approves the
+# pending action over REST, so the tool result says "awaiting_approval", never "closed".
+def test_run_tool_close_invoice_open_invoice_records_a_pending_action_and_leaves_it_open(db):
+    # Arrange
+    db["invoices"].by_id["1930438491"] = OPEN_INVOICE
+
+    # Act
+    output = run_tool(db, "close_invoice", {"invoice_id": "1930438491", "reason": "wire received"}, "conv-1")
+
+    # Assert
+    result = json.loads(output.content)
+    [stored] = db["pending_actions"].documents
+    assert result["status"] == "awaiting_approval"
+    assert output.pending_action.action_id == result["pendingActionId"] == stored["_id"]
+    assert output.pending_action.consequence == {
+        "currentAmountOpen": 1234.5,
+        "currency": "USD",
+        "customerNumber": "0200769623",
+        "customerName": "WAL-MART",
+    }
+    assert (stored["invoiceId"], stored["reason"], stored["conversationId"]) == ("1930438491", "wire received", "conv-1")
+    assert output.chart_id is None
+
+
+@pytest.mark.parametrize(
+    ("stored", "tool_input", "expected_message"),
+    [
+        ({}, {"invoice_id": "404", "reason": "wire"}, "No invoice '404' found"),
+        ({"1930438491": OPEN_INVOICE | {"isOpen": False}}, {"invoice_id": "1930438491", "reason": "wire"},
+         "is not open; nothing to close"),
+        ({}, {"invoice_id": "1930438491"}, "reason: Field required"),
+        ({}, {"invoice_id": "1930438491", "reason": "x" * 201}, "reason: String should have at most 200 characters"),
+    ],
+    ids=["unknown_invoice", "already_closed", "missing_reason", "reason_over_cap"],
+)
+def test_run_tool_close_invoice_invalid_request_raises_tool_input_error_and_stores_nothing(
+    db, stored, tool_input, expected_message
+):
+    # Arrange
+    db["invoices"].by_id.update(stored)
+
+    # Act
+    with pytest.raises(ToolInputError) as raised:
+        run_tool(db, "close_invoice", tool_input, "conv-1")
+
+    # Assert
+    assert expected_message in str(raised.value)
+    assert db["pending_actions"].documents == []
 
 
 @pytest.mark.parametrize(

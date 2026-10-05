@@ -245,7 +245,7 @@ def test_chat_without_anthropic_credentials_returns_503(client, monkeypatch):
     ("body", "expected"),
     [
         ({"message": "question"}, (AssistantName.ADVISOR, ["get_product_facets", "search_products"])),
-        ({"message": "question", "assistant": "analyst"}, (AssistantName.ANALYST, ["analyze_invoices", "chart_invoices", "list_invoices"])),
+        ({"message": "question", "assistant": "analyst"}, (AssistantName.ANALYST, ["analyze_invoices", "chart_invoices", "close_invoice", "list_invoices"])),
     ],
     ids=["default_is_advisor", "analyst"],
 )
