@@ -22,6 +22,8 @@ PURE_MODULES = [
     "app.utils.mongo",
     "app.auth.roles",
     "app.auth.passwords",
+    "app.auth.signer",
+    "app.auth.tokens",
 ]
 
 

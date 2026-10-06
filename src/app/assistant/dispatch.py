@@ -1,7 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -24,6 +24,7 @@ from app.charts.storage import CHART_COLLECTION
 from app.invoices.pending_actions import PENDING_ACTIONS_COLLECTION, PendingAction
 from app.invoices.schemas import InvoiceAnalyticsParams
 from app.invoices.service import analyze_invoices, list_invoices, request_close
+from app.utils.mongo import CollectionSource
 
 HIDDEN_PRODUCT_FIELDS = frozenset({"_id", "tier"})
 
@@ -33,10 +34,6 @@ logger = logging.getLogger(__name__)
 
 class ToolInputError(ValueError):
     pass
-
-
-class CollectionSource(Protocol):
-    def __getitem__(self, name: str) -> Any: ...
 
 
 @dataclass(frozen=True)

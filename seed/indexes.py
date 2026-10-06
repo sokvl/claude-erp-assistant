@@ -32,6 +32,15 @@ the collection, so every pending action must carry `expiresAt`. Deciding also
 checks `expiresAt` in its filter, because the TTL sweep runs about once a minute
 rather than exactly on expiry.
 
+refresh_tokens - one document per issued refresh token, keyed by its SHA-256,
+so the token itself is never stored. expiresAt is the TTL; familyId lets one
+update revoke every token of a session when a used token is replayed.
+
+login_attempts - failed logins per username, keyed by the username. expiresAt
+is the TTL, so a lockout lifts itself once the window passes.
+
+users - keyed by the username, so the _id index is the unique one it needs.
+
 products - 52 documents fit in one storage page, where a collection scan beats
 any index lookup, and every spec field lives on the 11 GPUs that `category`
 already isolates. (category, listPrice) is kept for the primary shape: a
@@ -55,6 +64,15 @@ CHART_INDEXES = [
 ]
 
 PENDING_ACTION_INDEXES = [
+    IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
+]
+
+REFRESH_TOKEN_INDEXES = [
+    IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
+    IndexModel([("familyId", ASCENDING)]),
+]
+
+LOGIN_ATTEMPT_INDEXES = [
     IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
 ]
 

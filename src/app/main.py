@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pymongo.errors import PyMongoError
 
-from app.routers import charts, chat, invoices, pending_actions, products
+from app.routers import auth, charts, chat, invoices, pending_actions, products
 
 STATIC_DIR = Path(__file__).parent / "static"
 CHAT_PAGE = STATIC_DIR / "chat.html"
@@ -14,6 +14,7 @@ CHAT_PAGE = STATIC_DIR / "chat.html"
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+app.include_router(auth.router)
 app.include_router(products.router)
 app.include_router(invoices.router)
 app.include_router(chat.router)

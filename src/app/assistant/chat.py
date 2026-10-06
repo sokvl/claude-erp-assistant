@@ -13,9 +13,10 @@ import httpx2
 from anthropic.types import Message, ToolUseBlock
 from pymongo.errors import PyMongoError
 
-from app.assistant.dispatch import CollectionSource, ToolInputError, ToolOutput, run_tool
+from app.assistant.dispatch import ToolInputError, ToolOutput, run_tool
 from app.assistant.profiles import Profile
 from app.utils.dates import today_in_business_timezone
+from app.utils.mongo import CollectionSource
 
 MAX_MODEL_CALLS = 6  # user -> model -> tool -> model -> tool -> ...; caps a runaway tool loop
 MID_STREAM_RETRIES = 2

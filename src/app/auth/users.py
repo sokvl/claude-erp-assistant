@@ -40,3 +40,7 @@ def create_user(collection: Any, username: str, password: str, role: Role) -> st
 
 def find_user(collection: Any, username: str) -> dict[str, Any] | None:
     return collection.find_one({"_id": username.strip().lower()}, max_time_ms=QUERY_TIMEOUT_MS)
+
+
+def replace_password_hash(collection: Any, username: str, password_hash: str) -> None:
+    collection.update_one({"_id": username}, {"$set": {"passwordHash": password_hash}})
