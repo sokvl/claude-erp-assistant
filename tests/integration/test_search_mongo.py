@@ -3,7 +3,6 @@ import pytest
 from app.catalog.enums import SortField, SortOrder
 from app.catalog.query import build_product_filter, build_search_pipeline
 from app.catalog.service import search_products
-from app.config import API_KEY
 from app.limits import MAX_PAGE, MAX_PAGE_SIZE, MAX_PRICE, MAX_VRAM_GB
 
 pytestmark = pytest.mark.integration
@@ -157,7 +156,7 @@ def test_search_products_match_stage_uses_an_index(products):
 )
 def test_list_products_values_at_cap_encode_and_execute_against_mongo(client, query):
     # Arrange / Act
-    response = client.get(f"/products{query}", headers={"X-API-Key": API_KEY})
+    response = client.get(f"/products{query}")
 
     # Assert
     assert response.status_code == 200

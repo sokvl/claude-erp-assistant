@@ -8,13 +8,15 @@ from app.assistant import memory
 from app.assistant.memory import ConversationStore
 from app.assistant.profiles import AssistantName
 from app.assistant.usage import USAGE_COLLECTION
-from app.config import API_KEY
+from app.auth.roles import Principal, Role
 from app.db import get_database
 from app.main import app
 from app.routers import chat as chat_router
 from app.routers.chat import assistant_client, chat_store, chat_tools
+from app.security import current_principal
 
-AUTH = {"X-API-Key": API_KEY}
+MANAGER = Principal("anna", Role.MANAGER)
+
 MODEL_CALL_USAGE = {"input_tokens": 1200, "output_tokens": 80, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
 
 
@@ -32,9 +34,9 @@ class ConflictingStore(ConversationStore):
 
 
 def _scripted_turn(*items, seen_history=None, seen_turns=None, seen_conversations=None):
-    def fake_run_turn(client, db, profile, tools, history, user_text, steps, conversation_id=None):
+    def fake_run_turn(client, db, profile, tools, history, user_text, steps, conversation_id=None, username=None):
         if seen_conversations is not None:
-            seen_conversations.append(conversation_id)
+            seen_conversations.append((conversation_id, username))
         if seen_history is not None:
             seen_history.append(list(history))
         if seen_turns is not None:
@@ -69,6 +71,7 @@ def usage():
 def store(usage):
     fresh = ConversationStore()
     app.dependency_overrides[get_database] = lambda: {USAGE_COLLECTION: usage}
+    app.dependency_overrides[current_principal] = lambda: MANAGER
     app.dependency_overrides[chat_store] = lambda: fresh
     app.dependency_overrides[assistant_client] = lambda: object()
     app.dependency_overrides[chat_tools] = lambda: []
@@ -90,7 +93,7 @@ def test_chat_successful_turn_streams_events_in_order(client, monkeypatch):
     )
 
     # Act
-    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
     assert [name for name, _ in events] == ["conversation", "tool", "text", "done"]
@@ -105,10 +108,10 @@ def test_chat_successful_turn_saves_only_question_and_answer(client, store, monk
     )
 
     # Act
-    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
-    assert store.history(events[0][1]["conversation_id"]) == [
+    assert store.history(events[0][1]["conversation_id"], "anna") == [
         {"role": "user", "content": "question"},
         {"role": "assistant", "content": "Hi"},
     ]
@@ -127,7 +130,7 @@ def test_chat_failed_turn_ends_with_error_event(client, monkeypatch, failure, co
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(TextDelta("partial"), failure))
 
     # Act
-    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
     assert events[-1] == ("error", {"code": code, "message": ERROR_MESSAGES[code]})
@@ -143,10 +146,10 @@ def test_chat_failed_turn_does_not_save_history(client, store, monkeypatch, fail
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(TextDelta("partial"), failure))
 
     # Act
-    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
-    assert store.history(events[0][1]["conversation_id"]) == []
+    assert store.history(events[0][1]["conversation_id"], "anna") == []
 
 
 def test_chat_history_changed_during_turn_reports_conflict(client, monkeypatch):
@@ -155,7 +158,7 @@ def test_chat_history_changed_during_turn_reports_conflict(client, monkeypatch):
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
 
     # Act
-    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
     assert events[-1] == ("error", {"code": "conflict", "message": ERROR_MESSAGES["conflict"]})
@@ -175,7 +178,7 @@ def test_chat_any_turn_records_token_usage_with_outcome(client, usage, monkeypat
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(*items))
 
     # Act
-    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
     [document] = usage.documents
@@ -187,7 +190,7 @@ def test_chat_any_turn_records_token_usage_with_outcome(client, usage, monkeypat
 def test_chat_existing_conversation_passes_saved_history_to_turn(client, monkeypatch):
     # Arrange
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("first answer", truncated=False)))
-    first = _events(client.post("/chat", json={"message": "first question"}, headers=AUTH))
+    first = _events(client.post("/chat", json={"message": "first question"}))
     conversation_id = first[0][1]["conversation_id"]
     seen_history = []
     monkeypatch.setattr(
@@ -195,7 +198,7 @@ def test_chat_existing_conversation_passes_saved_history_to_turn(client, monkeyp
     )
 
     # Act
-    client.post("/chat", json={"message": "follow-up", "conversation_id": conversation_id}, headers=AUTH)
+    client.post("/chat", json={"message": "follow-up", "conversation_id": conversation_id})
 
     # Assert
     assert seen_history == [[
@@ -205,24 +208,24 @@ def test_chat_existing_conversation_passes_saved_history_to_turn(client, monkeyp
 
 
 @pytest.mark.parametrize(
-    ("headers", "body", "status"),
+    ("body", "status"),
     [
-        (AUTH, {"message": ""}, 422),
-        (AUTH, {"message": "x" * 4001}, 422),
-        (AUTH, {"message": "question", "extra": 1}, 422),
-        (AUTH, {}, 422),
-        (AUTH, {"message": "question", "conversation_id": "unknown"}, 404),
-        (AUTH, {"message": "question", "assistant": "oracle"}, 422),
+        ({"message": ""}, 422),
+        ({"message": "x" * 4001}, 422),
+        ({"message": "question", "extra": 1}, 422),
+        ({}, 422),
+        ({"message": "question", "conversation_id": "unknown"}, 404),
+        ({"message": "question", "assistant": "oracle"}, 422),
     ],
     ids=["empty_message", "message_too_long",
          "unknown_field", "missing_message", "unknown_conversation", "unknown_assistant"],
 )
-def test_chat_invalid_request_is_rejected_before_streaming(client, monkeypatch, headers, body, status):
+def test_chat_invalid_request_is_rejected_before_streaming(client, monkeypatch, body, status):
     # Arrange
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("never", truncated=False)))
 
     # Act
-    response = client.post("/chat", json=body, headers=headers)
+    response = client.post("/chat", json=body)
 
     # Assert
     assert response.status_code == status
@@ -235,7 +238,7 @@ def test_chat_without_anthropic_credentials_returns_503(client, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
 
     # Act
-    response = client.post("/chat", json={"message": "question"}, headers=AUTH)
+    response = client.post("/chat", json={"message": "question"})
 
     # Assert
     assert response.status_code == 503
@@ -256,7 +259,7 @@ def test_chat_turn_runs_with_the_selected_assistants_profile_and_tools(client, m
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False), seen_turns=seen_turns))
 
     # Act
-    client.post("/chat", json=body, headers=AUTH)
+    client.post("/chat", json=body)
 
     # Assert
     assert seen_turns == [expected]
@@ -267,7 +270,7 @@ def test_chat_analyst_turn_records_usage_under_the_analyst(client, usage, monkey
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
 
     # Act
-    client.post("/chat", json={"message": "question", "assistant": "analyst"}, headers=AUTH)
+    client.post("/chat", json={"message": "question", "assistant": "analyst"})
 
     # Assert
     [document] = usage.documents
@@ -279,14 +282,13 @@ def test_chat_conversation_of_the_other_assistant_is_unknown(client, monkeypatch
     app.dependency_overrides.pop(chat_store)
     monkeypatch.setattr(memory, "stores", {assistant: ConversationStore() for assistant in AssistantName})
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
-    advisor_events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    advisor_events = _events(client.post("/chat", json={"message": "question"}))
     conversation_id = advisor_events[0][1]["conversation_id"]
 
     # Act
     response = client.post(
         "/chat",
         json={"message": "follow-up", "conversation_id": conversation_id, "assistant": "analyst"},
-        headers=AUTH,
     )
 
     # Assert
@@ -309,12 +311,12 @@ def test_chat_turn_with_a_chart_streams_its_id_and_keeps_it_out_of_memory(client
     )
 
     # Act
-    events = _events(client.post("/chat", json={"message": "trend", "assistant": "analyst"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "trend", "assistant": "analyst"}))
 
     # Assert
     assert [name for name, _ in events] == ["conversation", "tool", "chart", "text", "done"]
     assert dict(events)["chart"] == {"chart_id": "chart-1"}
-    assert store.history(events[0][1]["conversation_id"]) == [
+    assert store.history(events[0][1]["conversation_id"], "anna") == [
         {"role": "user", "content": "trend"},
         {"role": "assistant", "content": "Revenue rose."},
     ]
@@ -330,7 +332,34 @@ def test_chat_turn_passes_the_conversation_id_to_the_agent_loop(client, monkeypa
     )
 
     # Act
-    events = _events(client.post("/chat", json={"message": "question"}, headers=AUTH))
+    events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
-    assert seen == [events[0][1]["conversation_id"]]
+    assert seen == [(events[0][1]["conversation_id"], "anna")]
+
+
+def test_chat_another_users_conversation_returns_404(client, monkeypatch):
+    # Arrange
+    monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
+    conversation_id = _events(client.post("/chat", json={"message": "question"}))[0][1]["conversation_id"]
+    app.dependency_overrides[current_principal] = lambda: Principal("piotr", Role.MANAGER)
+
+    # Act
+    response = client.post("/chat", json={"message": "follow-up", "conversation_id": conversation_id})
+
+    # Assert
+    assert (response.status_code, response.json()["detail"]) == (404, "Unknown conversation")
+
+
+def test_chat_consultant_asking_for_the_analyst_returns_403_before_any_turn(client, monkeypatch):
+    # Arrange
+    turns = []
+    monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False), seen_turns=turns))
+    app.dependency_overrides[current_principal] = lambda: Principal("ola", Role.CONSULTANT)
+
+    # Act
+    response = client.post("/chat", json={"message": "question", "assistant": "analyst"})
+
+    # Assert
+    assert response.status_code == 403
+    assert turns == []

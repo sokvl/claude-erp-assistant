@@ -15,6 +15,7 @@ METADATA_PROJECTION = {"image": 0}
 def save_chart(
     collection: Any,
     conversation_id: str | None,
+    username: str | None,
     params: ChartParams,
     title: str,
     image: bytes,
@@ -25,6 +26,7 @@ def save_chart(
     document = {
         "_id": uuid4().hex,
         "conversationId": conversation_id,
+        "username": username,
         "createdAt": created_at,
         "expiresAt": created_at + timedelta(days=CHART_TTL_DAYS),
         "title": title,
@@ -37,14 +39,19 @@ def save_chart(
     return document["_id"]
 
 
-def get_chart(collection: Any, chart_id: str) -> dict[str, Any] | None:
-    return collection.find_one({"_id": chart_id}, max_time_ms=QUERY_TIMEOUT_MS)
+def get_chart(collection: Any, chart_id: str, username: str) -> dict[str, Any] | None:
+    return collection.find_one({"_id": chart_id, "username": username}, max_time_ms=QUERY_TIMEOUT_MS)
 
 
-def recent_charts(collection: Any, conversation_id: str, limit: int = MAX_RECENT_CHARTS) -> list[dict[str, Any]]:
+def recent_charts(
+    collection: Any,
+    conversation_id: str,
+    username: str,
+    limit: int = MAX_RECENT_CHARTS,
+) -> list[dict[str, Any]]:
     return list(
         collection.find(
-            {"conversationId": conversation_id},
+            {"conversationId": conversation_id, "username": username},
             METADATA_PROJECTION,
             sort=[("createdAt", -1)],
             limit=limit,

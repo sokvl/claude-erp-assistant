@@ -54,6 +54,7 @@ def request_close(
     invoice_id: str,
     reason: str,
     conversation_id: str | None,
+    requested_by: str | None,
 ) -> dict[str, Any]:
     invoice = invoices.find_one({"_id": invoice_id}, INVOICE_PROJECTION, max_time_ms=QUERY_TIMEOUT_MS)
     if invoice is None:
@@ -66,7 +67,7 @@ def request_close(
         "customerNumber": invoice["customer"]["number"],
         "customerName": invoice["customer"]["name"],
     }
-    action_id = save_pending_action(pending_actions, conversation_id, invoice_id, reason, consequence)
+    action_id = save_pending_action(pending_actions, conversation_id, requested_by, invoice_id, reason, consequence)
     return {
         "status": "awaiting_approval",
         "pendingActionId": action_id,

@@ -43,10 +43,16 @@ class ToolOutput:
     pending_action: PendingAction | None = None
 
 
-def run_tool(db: CollectionSource, name: str, tool_input: Any, conversation_id: str | None = None) -> ToolOutput:
+def run_tool(
+    db: CollectionSource,
+    name: str,
+    tool_input: Any,
+    conversation_id: str | None = None,
+    username: str | None = None,
+) -> ToolOutput:
     logger.debug("tool %s called with %s", name, tool_input)
     try:
-        result = _dispatch(db, name, tool_input, conversation_id)
+        result = _dispatch(db, name, tool_input, conversation_id, username)
     except ValidationError as exc:
         raise ToolInputError(_describe(exc)) from exc
     content = json.dumps(result, default=str, separators=(",", ":"), ensure_ascii=False)
@@ -57,7 +63,13 @@ def run_tool(db: CollectionSource, name: str, tool_input: Any, conversation_id: 
     return ToolOutput(content, result.get("chartId"), pending_action)
 
 
-def _dispatch(db: CollectionSource, name: str, tool_input: Any, conversation_id: str | None) -> dict[str, Any]:
+def _dispatch(
+    db: CollectionSource,
+    name: str,
+    tool_input: Any,
+    conversation_id: str | None,
+    username: str | None,
+) -> dict[str, Any]:
     if name == SEARCH_PRODUCTS:
         params = SearchProductsInput.model_validate(tool_input)
         result = search_catalog(db[PRODUCT_COLLECTION], params)
@@ -78,6 +90,7 @@ def _dispatch(db: CollectionSource, name: str, tool_input: Any, conversation_id:
             db[CHART_COLLECTION],
             ChartParams.model_validate(tool_input),
             conversation_id,
+            username,
         )
     if name == CLOSE_INVOICE:
         params = CloseInvoiceInput.model_validate(tool_input)
@@ -88,6 +101,7 @@ def _dispatch(db: CollectionSource, name: str, tool_input: Any, conversation_id:
                 params.invoice_id,
                 params.reason,
                 conversation_id,
+                username,
             )
         except ValueError as exc:
             raise ToolInputError(str(exc)) from exc

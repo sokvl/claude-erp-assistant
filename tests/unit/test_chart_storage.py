@@ -22,7 +22,7 @@ class Collection:
         self.documents.append(document)
 
     def find_one(self, criteria, **kwargs):
-        return next((doc for doc in self.documents if doc["_id"] == criteria["_id"]), None)
+        return next((doc for doc in self.documents if all(doc.get(k) == v for k, v in criteria.items())), None)
 
     def find(self, criteria, projection, **kwargs):
         self.find_calls.append((criteria, projection, kwargs))
@@ -34,12 +34,12 @@ def test_saveChart_image_storesMetadataAndBytesUnderANewId():
     collection = Collection()
 
     # Act
-    chart_id = save_chart(collection, "conv-1", PARAMS, "Open by customer", b"PNG")
+    chart_id = save_chart(collection, "conv-1", "anna", PARAMS, "Open by customer", b"PNG")
 
     # Assert
     [document] = collection.documents
     assert document["_id"] == chart_id
-    assert (document["conversationId"], document["title"]) == ("conv-1", "Open by customer")
+    assert (document["conversationId"], document["username"], document["title"]) == ("conv-1", "anna", "Open by customer")
     assert (document["chartType"], document["metric"], document["groupBy"]) == ("bar", "open", "customer")
     assert bytes(document["image"]) == b"PNG"
 
@@ -52,7 +52,7 @@ def test_saveChart_always_setsAnExpiryOneTtlAfterCreation():
     before = datetime.now(UTC)
 
     # Act
-    save_chart(collection, "conv-1", PARAMS, "Open by customer", b"PNG")
+    save_chart(collection, "conv-1", "anna", PARAMS, "Open by customer", b"PNG")
 
     # Assert
     [document] = collection.documents
@@ -66,7 +66,7 @@ def test_saveChart_oversizedImage_isRejectedBeforeTheInsert():
 
     # Act
     with pytest.raises(ValueError, match="over the"):
-        save_chart(collection, "conv-1", PARAMS, "Huge", b"x" * (MAX_CHART_BYTES + 1))
+        save_chart(collection, "conv-1", "anna", PARAMS, "Huge", b"x" * (MAX_CHART_BYTES + 1))
 
     # Assert
     assert collection.documents == []
@@ -80,17 +80,29 @@ def test_saveChart_databaseError_propagates():
 
     # Act / Assert
     with pytest.raises(ServerSelectionTimeoutError):
-        save_chart(collection, "conv-1", PARAMS, "Open by customer", b"PNG")
+        save_chart(collection, "conv-1", "anna", PARAMS, "Open by customer", b"PNG")
 
 
 def test_getChart_knownId_returnsTheStoredDocument():
     # Arrange
     collection = Collection()
-    chart_id = save_chart(collection, "conv-1", PARAMS, "Open by customer", b"PNG")
+    chart_id = save_chart(collection, "conv-1", "anna", PARAMS, "Open by customer", b"PNG")
 
     # Act / Assert
-    assert get_chart(collection, chart_id)["title"] == "Open by customer"
-    assert get_chart(collection, "missing") is None
+    assert get_chart(collection, chart_id, "anna")["title"] == "Open by customer"
+    assert get_chart(collection, "missing", "anna") is None
+
+
+def test_getChart_otherUsersChart_returnsNone():
+    # Arrange
+    collection = Collection()
+    chart_id = save_chart(collection, "conv-1", "anna", PARAMS, "Open by customer", b"PNG")
+
+    # Act
+    chart = get_chart(collection, chart_id, "piotr")
+
+    # Assert
+    assert chart is None
 
 
 def test_recentCharts_conversation_queriesNewestFirstWithoutTheImage():
@@ -98,10 +110,10 @@ def test_recentCharts_conversation_queriesNewestFirstWithoutTheImage():
     collection = Collection()
 
     # Act
-    recent_charts(collection, "conv-1", 5)
+    recent_charts(collection, "conv-1", "anna", 5)
 
     # Assert
     [(criteria, projection, kwargs)] = collection.find_calls
-    assert criteria == {"conversationId": "conv-1"}
+    assert criteria == {"conversationId": "conv-1", "username": "anna"}
     assert projection == {"image": 0}
     assert (kwargs["sort"], kwargs["limit"]) == ([("createdAt", -1)], 5)

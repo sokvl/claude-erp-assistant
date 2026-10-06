@@ -12,20 +12,23 @@ MAX_MESSAGES = 2 * MAX_CONVERSATION_TURNS
 class ConversationStore:
     def __init__(self) -> None:
         self._conversations: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+        self._owners: dict[str, str] = {}
         self._lock = Lock()
 
-    def create(self) -> str:
+    def create(self, owner: str) -> str:
         conversation_id = uuid4().hex
         with self._lock:
             self._conversations[conversation_id] = []
+            self._owners[conversation_id] = owner
             while len(self._conversations) > MAX_CONVERSATIONS:
-                self._conversations.popitem(last=False)
+                evicted, _ = self._conversations.popitem(last=False)
+                del self._owners[evicted]
         return conversation_id
 
-    def history(self, conversation_id: str) -> list[dict[str, Any]] | None:
+    def history(self, conversation_id: str, owner: str) -> list[dict[str, Any]] | None:
         with self._lock:
             messages = self._conversations.get(conversation_id)
-            if messages is None:
+            if messages is None or self._owners[conversation_id] != owner:
                 return None
             self._conversations.move_to_end(conversation_id)
             return list(messages)

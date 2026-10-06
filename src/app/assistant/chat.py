@@ -116,6 +116,7 @@ def run_turn(
     user_text: str,
     steps: list[TraceStep] | None = None,
     conversation_id: str | None = None,
+    username: str | None = None,
 ) -> Iterator[ChatEvent]:
     steps = [] if steps is None else steps
     run_id = uuid4().hex[:8]
@@ -123,7 +124,7 @@ def run_turn(
     try:
         today = today_in_business_timezone()
         request = build_request(profile, tools, today)
-        yield from _run_turn(client, db, request, history, user_text, steps, conversation_id)
+        yield from _run_turn(client, db, request, history, user_text, steps, conversation_id, username)
         outcome = "done"
     except ChatError as exc:
         outcome = exc.code
@@ -143,6 +144,7 @@ def _run_turn(
     user_text: str,
     steps: list[TraceStep],
     conversation_id: str | None,
+    username: str | None,
 ) -> Iterator[ChatEvent]:
     messages: list[dict[str, Any]] = [*history, {"role": "user", "content": user_text}]
     texts: list[str] = []
@@ -162,7 +164,7 @@ def _run_turn(
             results = []
             for block in tool_uses:
                 yield ToolCall(block.name)
-                result, output = _tool_result(db, block, steps, conversation_id)
+                result, output = _tool_result(db, block, steps, conversation_id, username)
                 if output and output.chart_id:
                     yield ChartRef(output.chart_id)
                 if output and output.pending_action:
@@ -265,11 +267,12 @@ def _tool_result(
     block: ToolUseBlock,
     steps: list[TraceStep],
     conversation_id: str | None,
+    username: str | None,
 ) -> tuple[dict[str, Any], ToolOutput | None]:
     name = f"tool {block.name}"
     started_at = time.perf_counter()
     try:
-        output = run_tool(db, block.name, block.input, conversation_id)
+        output = run_tool(db, block.name, block.input, conversation_id, username)
     except ToolInputError as exc:
         _record(steps, name, "is_error", started_at, str(exc)[:80])
         return {"type": "tool_result", "tool_use_id": block.id, "content": str(exc), "is_error": True}, None

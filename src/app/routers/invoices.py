@@ -3,12 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from pymongo.database import Database
 
+from app.auth.roles import Role
 from app.db import get_database
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceListParams
 from app.invoices.service import analyze_invoices, list_invoices
-from app.security import require_api_key
+from app.security import require_role
 
-router = APIRouter(prefix="/invoices", tags=["invoices"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/invoices", tags=["invoices"], dependencies=[Depends(require_role(Role.MANAGER))])
 
 
 @router.get("")

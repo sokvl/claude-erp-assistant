@@ -139,11 +139,12 @@ def test_run_tool_chart_invoices_stores_a_chart_and_returns_the_rows(db):
     db["invoices"].currencies = CHART_ROWS
 
     # Act
-    output = run_tool(db, "chart_invoices", {"chart_type": "bar", "group_by": "customer"}, "conv-1")
+    output = run_tool(db, "chart_invoices", {"chart_type": "bar", "group_by": "customer"}, "conv-1", "anna")
 
     # Assert
     result = json.loads(output.content)
     [stored] = db["charts"].documents
+    assert stored["username"] == "anna"
     assert output.chart_id == result["chartId"] == stored["_id"]
     assert result["currencies"] == CHART_ROWS
     assert (stored["conversationId"], stored["title"]) == ("conv-1", "Invoiced by customer")
@@ -179,7 +180,7 @@ def test_run_tool_close_invoice_open_invoice_records_a_pending_action_and_leaves
     db["invoices"].by_id["1930438491"] = OPEN_INVOICE
 
     # Act
-    output = run_tool(db, "close_invoice", {"invoice_id": "1930438491", "reason": "wire received"}, "conv-1")
+    output = run_tool(db, "close_invoice", {"invoice_id": "1930438491", "reason": "wire received"}, "conv-1", "anna")
 
     # Assert
     result = json.loads(output.content)
@@ -193,6 +194,7 @@ def test_run_tool_close_invoice_open_invoice_records_a_pending_action_and_leaves
         "customerName": "WAL-MART",
     }
     assert (stored["invoiceId"], stored["reason"], stored["conversationId"]) == ("1930438491", "wire received", "conv-1")
+    assert stored["requestedBy"] == "anna"
     assert output.chart_id is None
 
 

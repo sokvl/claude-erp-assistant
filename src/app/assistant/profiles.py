@@ -6,6 +6,7 @@ from typing import Any
 import anthropic
 
 from app.assistant.prompts import ANALYST_PROMPT, SYSTEM_PROMPT
+from app.auth.roles import Role
 
 ADVISOR_MODEL = "claude-haiku-4-5-20251001"
 ANALYST_MODEL = "claude-sonnet-5"
@@ -19,6 +20,7 @@ class AssistantName(StrEnum):
 @dataclass(frozen=True)
 class Profile:
     name: AssistantName
+    role: Role
     model: str
     system_prompt: str
     max_tokens: int
@@ -28,6 +30,7 @@ class Profile:
 
 ADVISOR = Profile(
     name=AssistantName.ADVISOR,
+    role=Role.CONSULTANT,
     model=ADVISOR_MODEL,
     system_prompt=SYSTEM_PROMPT,
     max_tokens=4096,
@@ -35,6 +38,7 @@ ADVISOR = Profile(
 
 ANALYST = Profile(
     name=AssistantName.ANALYST,
+    role=Role.MANAGER,
     model=ANALYST_MODEL,
     system_prompt=ANALYST_PROMPT,
     max_tokens=64_000,

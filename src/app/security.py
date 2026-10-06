@@ -1,28 +1,17 @@
 import logging
-import secrets
+from collections.abc import Callable
 from functools import cache
 
 from fastapi import Depends, HTTPException, Security, status
-from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.auth.roles import Principal
+from app.auth.roles import Principal, Role, allows
 from app.auth.signer import LocalSigner, TokenSigner
 from app.auth.tokens import InvalidToken, verify_access_token
-from app.config import API_KEY
 
 logger = logging.getLogger(__name__)
 
-api_key_header = APIKeyHeader(name="X-API-Key")
 bearer = HTTPBearer(auto_error=False)
-
-
-def require_api_key(key: str = Security(api_key_header)):
-    if not secrets.compare_digest(key.encode(), API_KEY.encode()):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-            headers={"WWW-Authenticate": "APIKey"},
-        )
 
 
 @cache
@@ -41,6 +30,16 @@ def current_principal(
         return verify_access_token(credentials.credentials, signer.public_keys())
     except InvalidToken as exc:
         raise _unauthorized("Invalid or expired token") from exc
+
+
+@cache
+def require_role(required: Role) -> Callable[..., Principal]:
+    def dependency(principal: Principal = Depends(current_principal)) -> Principal:
+        if not allows(principal.role, required):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Requires the {required} role")
+        return principal
+
+    return dependency
 
 
 def _unauthorized(detail: str) -> HTTPException:

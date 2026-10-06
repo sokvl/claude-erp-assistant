@@ -78,9 +78,12 @@ def products(mongo_client):
 def client(products):
     from fastapi.testclient import TestClient
 
+    from app.auth.roles import Principal, Role
     from app.db import get_database
     from app.main import app
+    from app.security import current_principal
 
     app.dependency_overrides[get_database] = lambda: {"products": products}
+    app.dependency_overrides[current_principal] = lambda: Principal("anna", Role.CONSULTANT)
     yield TestClient(app)
     app.dependency_overrides.clear()
