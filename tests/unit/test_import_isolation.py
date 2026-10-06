@@ -20,6 +20,8 @@ PURE_MODULES = [
     "app.charts.schemas",
     "app.charts.render",
     "app.utils.mongo",
+    "app.auth.roles",
+    "app.auth.passwords",
 ]
 
 
