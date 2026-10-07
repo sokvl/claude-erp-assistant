@@ -12,7 +12,9 @@ from app.auth.roles import Principal, Role, allows
 from app.auth.signer import LocalSigner, TokenSigner
 from app.auth.tokens import InvalidToken, verify_access_token
 from app.auth.users import USER_COLLECTION, find_user
+from app.auth.vault_signer import VaultTransitSigner
 from app.db import get_database
+from app.vault import vault_client
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,8 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 @cache
 def get_signer() -> TokenSigner:
+    if vault_client() is not None:
+        return VaultTransitSigner(vault_client, vault_client.cache_clear)
     logger.warning("signing access tokens with an in-memory key; they stop verifying when the process restarts")
     return LocalSigner()
 

@@ -1,8 +1,11 @@
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
 testpaths = ["tests"]
-addopts = "-q --strict-markers -m 'not integration'"
-markers = ["integration: requires a live MongoDB on localhost:27017"]
+addopts = "-q --strict-markers -m 'not integration and not vault'"
+markers = [
+    "integration: requires a live MongoDB on localhost:27017",
+    "vault: requires a live Vault dev server at VAULT_TEST_ADDR (default http://127.0.0.1:8200)",
+]
 
 [tool.coverage.run]
 source = ["src/app"]
