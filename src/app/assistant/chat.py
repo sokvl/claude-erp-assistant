@@ -17,6 +17,7 @@ from app.assistant.dispatch import ToolInputError, ToolOutput, run_tool
 from app.assistant.profiles import Profile
 from app.utils.dates import today_in_business_timezone
 from app.utils.mongo import CollectionSource
+from app.vault import secret
 
 MAX_MODEL_CALLS = 6  # user -> model -> tool -> model -> tool -> ...; caps a runaway tool loop
 MID_STREAM_RETRIES = 2
@@ -90,7 +91,7 @@ ChatEvent = TextDelta | ToolCall | ChartRef | PendingActionRef | Answer
 
 @cache
 def get_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(timeout=TIMEOUT, max_retries=2)
+    return anthropic.Anthropic(api_key=secret("ANTHROPIC_API_KEY"), timeout=TIMEOUT, max_retries=2)
 
 
 def build_request(profile: Profile, tools: Sequence[dict[str, Any]], today: date) -> dict[str, Any]:

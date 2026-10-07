@@ -7,3 +7,4 @@ matplotlib
 anthropic==1.6.0
 argon2-cffi
 PyJWT[crypto]
+hvac

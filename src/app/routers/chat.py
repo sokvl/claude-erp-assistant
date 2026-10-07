@@ -28,6 +28,7 @@ from app.auth.roles import Principal, Role, allows
 from app.db import get_database
 from app.limits import MAX_CHAT_MESSAGE_LENGTH, MAX_CONVERSATION_ID_LENGTH
 from app.security import require_role
+from app.vault import secret
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class ChatRequest(BaseModel):
 
 
 def assistant_client() -> anthropic.Anthropic:
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+    if not (secret("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Assistant is not configured: set ANTHROPIC_API_KEY",
