@@ -5,7 +5,11 @@ covering the two things such a company spends its day on: what we sell (a facete
 catalog) and who owes us money (accounts receivable, analytics and charts).
 
 On top of the REST API sit two Claude assistants. An **Advisor** (Haiku 4.5) helps staff serving a customer; an **Analyst** (Sonnet 5)
-answers finance questions with figures and charts.
+answers finance questions with figures and charts, and can ask a human to close an invoice.
+
+Staff sign in with a password and get a role: a **consultant** sees the catalog and the advisor, a
+**manager** also sees invoices, analytics, charts and the analyst. Secrets and the token signing
+key live in **HashiCorp Vault**.
 
 Built while working toward the **Claude Certified Developer** certification. The domain is a
 vehicle; the point was tool use, prompt caching, streaming, evals and a real error taxonomy
@@ -33,9 +37,10 @@ configuration inside the budget and totals it from returned prices.
 flowchart TB
     UI["Browser · static/chat.html"]
 
-    subgraph APP["FastAPI · X-API-Key on every router"]
+    subgraph APP["FastAPI · JWT or API key, a role on every router"]
         direction TB
-        RT["routers/<br/>products · invoices · chat · charts"]
+        RT["routers/<br/>auth · products · invoices · chat · charts · pending-actions"]
+        AUTH["auth/ · security.py<br/><i>argon2id · EdDSA JWT · rotating refresh<br/>API keys · roles</i>"]
 
         subgraph AST["assistant/"]
             direction LR
@@ -52,12 +57,16 @@ flowchart TB
         end
     end
 
-    DB[("MongoDB 7 · zstd<br/>products · invoices.lines<br/>chat_usage · charts (PNG + TTL)")]
+    DB[("MongoDB 7 · zstd<br/>products · invoices.lines<br/>chat_usage · charts (PNG + TTL)<br/>users · refresh_tokens · api_keys")]
     API["Anthropic API<br/>Sonnet 5 · Haiku 4.5<br/><i>prompt caching · adaptive thinking</i>"]
+    VAULT["HashiCorp Vault<br/><i>KV secrets · Transit signing key</i>"]
 
-    UI -- "SSE: conversation → text / tool / chart → done" --> RT
+    UI -- "SSE: conversation → text / tool / chart / confirmation_required → done" --> RT
+    RT --> AUTH
     RT --> AST
     RT --> DOM
+    AUTH --> DB
+    AUTH -- "sign · rotate" --> VAULT
     LOOP <--> API
     LOOP --> DISP
     LOOP --> BOOK
@@ -69,7 +78,7 @@ flowchart TB
     classDef store fill:#0072B2,stroke:#04395e,color:#fff
     classDef ext fill:#D55E00,stroke:#7a3600,color:#fff
     class DB store
-    class API ext
+    class API,VAULT ext
 ```
 
 
@@ -80,14 +89,18 @@ flowchart TB
 * **Prompt caching.** 
 * **Streaming agent loop.** 
 * **An error taxonomy that respects what was already sent.**
-* **Self correcting tool errors.** B
+* **Self correcting tool errors.**
 * **Adaptive thinking** on the analyst (`effort: medium`, 90 s read timeout).
 * **Token and cost tracking** 
 * **Server rendered charts**
+* **Human-approved actions.** The analyst can only *request* an invoice close; the employee approves or rejects it in the chat, and only then does the invoice change.
+* **Accounts and roles.** argon2id passwords, 15-minute EdDSA access tokens, refresh tokens that rotate on every use and end the whole session when a used one is replayed, login lockout, per-account API keys for scripts.
+* **Authorization in code, not in the prompt.** The model never learns who is asking; a consultant cannot reach the analyst or its tools, and conversations, charts and close requests belong to the user who made them.
+* **Vault.** Secrets come from Vault KV through AppRole; access tokens are signed by a Transit key that never leaves Vault and rotates without logging anyone out.
 
 ## Tests and evals
 
-618 tests at 98.95% branch coverage (gate 85%): pure query builders and schemas, the agent loop and its failure modes.
+733 tests at 99.2% branch coverage (gate 85%): pure query builders and schemas, the agent loop and its failure modes, and the auth flow including a route × role matrix. 89 integration tests run against a real MongoDB and 3 against a real Vault (key rotation), each as its own CI job.
 
 Evals are the part that matters for an LLM feature, because a passing test suite says nothing
 about whether the model *behaves*. `evals/` holds 31 cases (21 advisor, 10 analyst) graded
@@ -108,7 +121,8 @@ programmatically rather than by vibes:
 python evals/run.py [--level functional|e2e|all] [--case ID]
 ```
 
-They call the live API and cost tokens, so they stay out of CI and are run deliberately.
+They call the live API and cost tokens, so they stay out of CI and are run deliberately. The
+`e2e` level goes through the real auth path with an API key issued for a manager.
 
 ## Tech stack
 
@@ -119,6 +133,7 @@ They call the live API and cost tokens, so they stay out of CI and are run delib
 | Database | MongoDB 7 (zstd block compression) · PyMongo 4.18 |
 | AI | Anthropic SDK 1.6 · Claude Sonnet 5 · Claude Haiku 4.5 |
 | Charts | Matplotlib 3.11 (Agg backend) |
+| Auth | argon2-cffi · PyJWT (EdDSA) · HashiCorp Vault 1.20 (KV v2, Transit, AppRole) via hvac |
 | Data prep | pandas |
 | Tests, CI | pytest · branch coverage · GitHub Actions |
 | Infra | Docker Compose |
@@ -145,4 +160,8 @@ Still being built. Next up:
 * **Warranty and technical detail RAG.** Retrieval over product manuals, spec sheets and warranty
   terms, so the advisor can answer "how long is the warranty on this card" or a question about a
   spec the catalog does not carry, still grounded in a retrieved source rather than model memory.
+* **Account admin panel.** The admin role exists; accounts and API keys are still managed from
+  the command line.
+* **MongoDB authentication.** Vault already holds the connection string; the database itself
+  still runs without a password locally.
 
