@@ -1,7 +1,10 @@
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 from memory_collection import MemoryCollection
 
+from app.auth.api_keys import issue_api_key
 from app.auth.roles import Role
 from app.auth.signer import LocalSigner
 from app.auth.users import create_user
@@ -16,7 +19,12 @@ BASE_URL = "https://testserver"
 
 @pytest.fixture
 def db():
-    database = {"users": MemoryCollection(), "login_attempts": MemoryCollection(), "refresh_tokens": MemoryCollection()}
+    database = {
+        "users": MemoryCollection(),
+        "login_attempts": MemoryCollection(),
+        "refresh_tokens": MemoryCollection(),
+        "api_keys": MemoryCollection(),
+    }
     create_user(database["users"], "anna", PASSWORD, Role.MANAGER)
     signer = LocalSigner()
     app.dependency_overrides[get_database] = lambda: database
@@ -152,3 +160,19 @@ def test_login_invalid_body_returns_422(client, body):
 
     # Assert
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [(None, (200, "anna")), ({"X-API-Key": "ak_00000000_made-up"}, (401, None))],
+    ids=["issued_key", "unknown_key"],
+)
+def test_me_with_an_api_key_header_authenticates_as_its_owner(client, db, headers, expected):
+    # Arrange
+    key = issue_api_key(db["api_keys"], "anna", "evals", datetime.now(UTC))
+
+    # Act
+    response = client.get("/auth/me", headers=headers or {"X-API-Key": key})
+
+    # Assert
+    assert (response.status_code, response.json().get("username")) == expected
