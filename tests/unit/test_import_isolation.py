@@ -6,7 +6,7 @@ import pytest
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 
-# app.config reads API_KEY at import time and app.db builds a MongoClient, so
+# app.config reads the environment at import time and app.db builds a MongoClient, so
 # the pure modules staying clear of both is what lets this suite run with no
 # environment and no database.
 PURE_MODULES = [
@@ -20,6 +20,10 @@ PURE_MODULES = [
     "app.charts.schemas",
     "app.charts.render",
     "app.utils.mongo",
+    "app.auth.roles",
+    "app.auth.passwords",
+    "app.auth.signer",
+    "app.auth.tokens",
 ]
 
 

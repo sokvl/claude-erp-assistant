@@ -2,12 +2,14 @@ import pytest
 from fastapi.testclient import TestClient
 from pymongo.errors import ExecutionTimeout, ServerSelectionTimeoutError
 
-from app.config import API_KEY
+from app.auth.roles import Principal, Role
 from app.db import get_database
 from app.limits import MAX_USE_CASES
 from app.main import app
+from app.security import current_principal
 
-AUTH = {"X-API-Key": API_KEY}
+MANAGER = Principal("anna", Role.MANAGER)
+
 
 VOCABULARIES = {
     "category": ["GPU", "CPU"],
@@ -37,6 +39,7 @@ class FakeCollection:
 def collection():
     fake = FakeCollection()
     app.dependency_overrides[get_database] = lambda: {"products": fake}
+    app.dependency_overrides[current_principal] = lambda: MANAGER
     yield fake
     app.dependency_overrides.clear()
 
@@ -52,7 +55,7 @@ def test_list_products_query_params_reach_the_pipeline(client, collection):
             "&requires_pooling=true&sort_by=vram&sort_order=desc&page=2&page_size=5"
 
     # Act
-    client.get(f"/products{query}", headers=AUTH)
+    client.get(f"/products{query}")
 
     # Assert
     [pipeline] = collection.aggregate_calls
@@ -70,7 +73,7 @@ def test_list_products_query_params_reach_the_pipeline(client, collection):
 
 def test_list_products_returns_paginated_envelope(client):
     # Arrange / Act
-    body = client.get("/products", headers=AUTH).json()
+    body = client.get("/products").json()
 
     # Assert
     assert body == {
@@ -99,7 +102,7 @@ def test_list_products_returns_paginated_envelope(client):
 )
 def test_list_products_hostile_query_is_rejected_before_the_database(client, collection, query):
     # Arrange / Act
-    response = client.get(f"/products{query}", headers=AUTH)
+    response = client.get(f"/products{query}")
 
     # Assert
     assert (response.status_code, collection.aggregate_calls) == (422, [])
@@ -107,7 +110,7 @@ def test_list_products_hostile_query_is_rejected_before_the_database(client, col
 
 def test_list_products_error_detail_names_the_rejected_value(client):
     # Arrange / Act
-    body = client.get("/products?category=Widget", headers=AUTH).json()
+    body = client.get("/products?category=Widget").json()
 
     # Assert
     assert "Widget" in str(body["detail"])
@@ -125,7 +128,7 @@ def test_list_products_database_error_returns_503_without_internals(collection, 
     client = TestClient(app, raise_server_exceptions=False)
 
     # Act
-    response = client.get("/products", headers=AUTH)
+    response = client.get("/products")
 
     # Assert
     assert (response.status_code, response.json()) == (503, {"detail": "Database unavailable"})
@@ -133,7 +136,7 @@ def test_list_products_database_error_returns_503_without_internals(collection, 
 
 def test_list_facets_returns_live_vocabularies(client):
     # Arrange / Act
-    body = client.get("/products/facets", headers=AUTH).json()
+    body = client.get("/products/facets").json()
 
     # Assert
     assert body == {

@@ -15,6 +15,7 @@ def chart_analytics(
     charts: Any,
     params: ChartParams,
     conversation_id: str | None = None,
+    username: str | None = None,
 ) -> dict[str, Any]:
     figures = InvoiceAnalyticsParams.model_validate(params.model_dump(exclude=DRAWING_FIELDS))
     result = analyze_invoices(invoices, figures)
@@ -26,7 +27,7 @@ def chart_analytics(
         group_by=params.group_by,
         title=title,
     )
-    chart_id = None if image is None else save_chart(charts, conversation_id, params, title, image)
+    chart_id = None if image is None else save_chart(charts, conversation_id, username, params, title, image)
     return {"chartId": chart_id, "chartTitle": title, **result}
 
 

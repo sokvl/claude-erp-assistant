@@ -9,13 +9,31 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  vault:
+    image: hashicorp/vault:1.20
+    container_name: invoices_vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-dev-root-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "127.0.0.1:8200:8200"
+
   app:
     build: .
     env_file: .env
     environment:
       MONGO_URI: mongodb://mongo:27017
+      VAULT_ADDR: http://vault:8200
+      VAULT_ROLE_ID_FILE: /run/secrets/vault_role_id
+      VAULT_SECRET_ID_FILE: /run/secrets/vault_secret_id
+    volumes:
+      - ./deploy/vault/role_id:/run/secrets/vault_role_id:ro,z
+      - ./deploy/vault/secret_id:/run/secrets/vault_secret_id:ro,z
     depends_on:
       - mongo
+      - vault
     ports:
       - "8000:8000"
 

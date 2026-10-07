@@ -13,7 +13,7 @@ def test_conversation_store_new_conversation_has_empty_history():
     store = ConversationStore()
 
     # Act
-    history = store.history(store.create())
+    history = store.history(store.create("anna"), "anna")
 
     # Assert
     assert history == []
@@ -21,7 +21,7 @@ def test_conversation_store_new_conversation_has_empty_history():
 
 def test_conversation_store_unknown_conversation_has_no_history():
     # Arrange / Act
-    history = ConversationStore().history("never-created")
+    history = ConversationStore().history("never-created", "anna")
 
     # Assert
     assert history is None
@@ -30,13 +30,13 @@ def test_conversation_store_unknown_conversation_has_no_history():
 def test_conversation_store_append_turn_saves_question_and_answer():
     # Arrange
     store = ConversationStore()
-    conversation_id = store.create()
+    conversation_id = store.create("anna")
 
     # Act
     saved = store.append_turn(conversation_id, 0, "question", "answer")
 
     # Assert
-    assert (saved, store.history(conversation_id)) == (True, _turn("question", "answer"))
+    assert (saved, store.history(conversation_id, "anna")) == (True, _turn("question", "answer"))
 
 
 @pytest.mark.parametrize(
@@ -47,51 +47,66 @@ def test_conversation_store_append_turn_saves_question_and_answer():
 def test_conversation_store_append_turn_rejects_stale_or_unknown_conversation(known, expected_length):
     # Arrange
     store = ConversationStore()
-    conversation_id = store.create() if known else "never-created"
+    conversation_id = store.create("anna") if known else "never-created"
 
     # Act
     saved = store.append_turn(conversation_id, expected_length, "question", "answer")
 
     # Assert
-    assert (saved, store.history(conversation_id)) == (False, [] if known else None)
+    assert (saved, store.history(conversation_id, "anna")) == (False, [] if known else None)
 
 
 def test_conversation_store_turn_cap_drops_oldest_turns(monkeypatch):
     # Arrange
     monkeypatch.setattr(memory, "MAX_MESSAGES", 4)
     store = ConversationStore()
-    conversation_id = store.create()
+    conversation_id = store.create("anna")
 
     # Act
     for number in range(3):
-        store.append_turn(conversation_id, len(store.history(conversation_id)), f"q{number}", f"a{number}")
+        store.append_turn(conversation_id, len(store.history(conversation_id, "anna")), f"q{number}", f"a{number}")
 
     # Assert
-    assert store.history(conversation_id) == _turn("q1", "a1") + _turn("q2", "a2")
+    assert store.history(conversation_id, "anna") == _turn("q1", "a1") + _turn("q2", "a2")
 
 
 def test_conversation_store_evicts_least_recently_used_conversation(monkeypatch):
     # Arrange
     monkeypatch.setattr(memory, "MAX_CONVERSATIONS", 2)
     store = ConversationStore()
-    first, second = store.create(), store.create()
-    store.history(first)
+    first, second = store.create("anna"), store.create("anna")
+    store.history(first, "anna")
 
     # Act
-    third = store.create()
+    third = store.create("anna")
 
     # Assert
-    assert (store.history(first), store.history(second), store.history(third)) == ([], None, [])
+    assert (store.history(first, "anna"), store.history(second, "anna"), store.history(third, "anna")) == ([], None, [])
 
 
 def test_conversation_store_history_is_a_copy():
     # Arrange
     store = ConversationStore()
-    conversation_id = store.create()
+    conversation_id = store.create("anna")
     store.append_turn(conversation_id, 0, "question", "answer")
 
     # Act
-    store.history(conversation_id).clear()
+    store.history(conversation_id, "anna").clear()
 
     # Assert
-    assert store.history(conversation_id) == _turn("question", "answer")
+    assert store.history(conversation_id, "anna") == _turn("question", "answer")
+
+
+# Conversation ids travel in the request body, so knowing one must not be enough:
+# another user's id reads as unknown, the same 404 a made-up id gets.
+def test_conversation_store_other_owner_gets_no_history():
+    # Arrange
+    store = ConversationStore()
+    conversation_id = store.create("anna")
+    store.append_turn(conversation_id, 0, "question", "answer")
+
+    # Act
+    history = store.history(conversation_id, "piotr")
+
+    # Assert
+    assert history is None

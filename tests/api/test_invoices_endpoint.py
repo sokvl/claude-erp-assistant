@@ -3,11 +3,13 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import API_KEY
+from app.auth.roles import Principal, Role
 from app.db import get_database
 from app.main import app
+from app.security import current_principal
 
-AUTH = {"X-API-Key": API_KEY}
+MANAGER = Principal("anna", Role.MANAGER)
+
 ROWS = [{"currency": "USD", "groupCount": 1, "rows": [{"key": "0200769623", "totalAmount": 30.0}]}]
 
 
@@ -35,6 +37,7 @@ class FakeInvoices:
 def invoices():
     fake = FakeInvoices()
     app.dependency_overrides[get_database] = lambda: {"invoices": fake}
+    app.dependency_overrides[current_principal] = lambda: MANAGER
     yield fake
     app.dependency_overrides.clear()
 
@@ -50,7 +53,7 @@ def test_list_invoices_query_params_reach_the_query(client, invoices):
             "&page=2&page_size=5"
 
     # Act
-    body = client.get(f"/invoices{query}", headers=AUTH).json()
+    body = client.get(f"/invoices{query}").json()
 
     # Assert
     [find] = invoices.find_calls
@@ -71,7 +74,7 @@ def test_list_invoices_query_params_reach_the_query(client, invoices):
 
 def test_list_invoices_returns_iso_dates(client):
     # Arrange / Act
-    body = client.get("/invoices", headers=AUTH).json()
+    body = client.get("/invoices").json()
 
     # Assert
     assert body["items"][0]["dates"]["postingDate"] == "2020-01-26T00:00:00"
@@ -79,7 +82,7 @@ def test_list_invoices_returns_iso_dates(client):
 
 def test_invoice_analytics_returns_figures_per_currency_with_as_of_and_coverage(client):
     # Arrange / Act
-    body = client.get("/invoices/analytics?group_by=customer&limit=5&as_of=2020-05-31", headers=AUTH).json()
+    body = client.get("/invoices/analytics?group_by=customer&limit=5&as_of=2020-05-31").json()
 
     # Assert
     assert body == {
@@ -106,7 +109,7 @@ def test_invoice_analytics_returns_figures_per_currency_with_as_of_and_coverage(
 )
 def test_invoice_endpoints_invalid_query_returns_422_without_querying(client, invoices, path):
     # Arrange / Act
-    response = client.get(path, headers=AUTH)
+    response = client.get(path)
 
     # Assert
     assert (response.status_code, invoices.aggregate_calls, invoices.find_calls) == (422, [], [])

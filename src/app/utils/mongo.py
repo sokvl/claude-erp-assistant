@@ -1,5 +1,9 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
+
+
+class CollectionSource(Protocol):
+    def __getitem__(self, name: str) -> Any: ...
 
 
 def range_filter(minimum: float | datetime | None, maximum: float | datetime | None) -> dict[str, Any]:

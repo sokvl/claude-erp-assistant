@@ -6,13 +6,11 @@ from pymongo.database import Database
 from app.catalog import vocab
 from app.catalog.schemas import ProductSearchParams
 from app.catalog.service import PRODUCT_COLLECTION, search_catalog
+from app.auth.roles import Role
 from app.db import get_database
-from app.security import require_api_key
+from app.security import require_role
 
-router = APIRouter(prefix="/products", 
-                   tags=["products"], 
-                   dependencies=[Depends(require_api_key)]
-                   )
+router = APIRouter(prefix="/products", tags=["products"], dependencies=[Depends(require_role(Role.CONSULTANT))])
 
 
 @router.get("/facets")

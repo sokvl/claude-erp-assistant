@@ -13,9 +13,11 @@ import httpx2
 from anthropic.types import Message, ToolUseBlock
 from pymongo.errors import PyMongoError
 
-from app.assistant.dispatch import CollectionSource, ToolInputError, ToolOutput, run_tool
+from app.assistant.dispatch import ToolInputError, ToolOutput, run_tool
 from app.assistant.profiles import Profile
 from app.utils.dates import today_in_business_timezone
+from app.utils.mongo import CollectionSource
+from app.vault import secret
 
 MAX_MODEL_CALLS = 6  # user -> model -> tool -> model -> tool -> ...; caps a runaway tool loop
 MID_STREAM_RETRIES = 2
@@ -89,7 +91,7 @@ ChatEvent = TextDelta | ToolCall | ChartRef | PendingActionRef | Answer
 
 @cache
 def get_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(timeout=TIMEOUT, max_retries=2)
+    return anthropic.Anthropic(api_key=secret("ANTHROPIC_API_KEY"), timeout=TIMEOUT, max_retries=2)
 
 
 def build_request(profile: Profile, tools: Sequence[dict[str, Any]], today: date) -> dict[str, Any]:
@@ -115,6 +117,7 @@ def run_turn(
     user_text: str,
     steps: list[TraceStep] | None = None,
     conversation_id: str | None = None,
+    username: str | None = None,
 ) -> Iterator[ChatEvent]:
     steps = [] if steps is None else steps
     run_id = uuid4().hex[:8]
@@ -122,7 +125,7 @@ def run_turn(
     try:
         today = today_in_business_timezone()
         request = build_request(profile, tools, today)
-        yield from _run_turn(client, db, request, history, user_text, steps, conversation_id)
+        yield from _run_turn(client, db, request, history, user_text, steps, conversation_id, username)
         outcome = "done"
     except ChatError as exc:
         outcome = exc.code
@@ -142,6 +145,7 @@ def _run_turn(
     user_text: str,
     steps: list[TraceStep],
     conversation_id: str | None,
+    username: str | None,
 ) -> Iterator[ChatEvent]:
     messages: list[dict[str, Any]] = [*history, {"role": "user", "content": user_text}]
     texts: list[str] = []
@@ -161,7 +165,7 @@ def _run_turn(
             results = []
             for block in tool_uses:
                 yield ToolCall(block.name)
-                result, output = _tool_result(db, block, steps, conversation_id)
+                result, output = _tool_result(db, block, steps, conversation_id, username)
                 if output and output.chart_id:
                     yield ChartRef(output.chart_id)
                 if output and output.pending_action:
@@ -264,11 +268,12 @@ def _tool_result(
     block: ToolUseBlock,
     steps: list[TraceStep],
     conversation_id: str | None,
+    username: str | None,
 ) -> tuple[dict[str, Any], ToolOutput | None]:
     name = f"tool {block.name}"
     started_at = time.perf_counter()
     try:
-        output = run_tool(db, block.name, block.input, conversation_id)
+        output = run_tool(db, block.name, block.input, conversation_id, username)
     except ToolInputError as exc:
         _record(steps, name, "is_error", started_at, str(exc)[:80])
         return {"type": "tool_result", "tool_use_id": block.id, "content": str(exc), "is_error": True}, None

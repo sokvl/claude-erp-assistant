@@ -22,6 +22,7 @@ class PendingAction:
 def save_pending_action(
     collection: Any,
     conversation_id: str | None,
+    requested_by: str | None,
     invoice_id: str,
     reason: str,
     consequence: dict[str, Any],
@@ -35,9 +36,11 @@ def save_pending_action(
         "consequence": consequence,
         "status": "pending",
         "conversationId": conversation_id,
+        "requestedBy": requested_by,
         "createdAt": created_at,
         "expiresAt": created_at + timedelta(minutes=PENDING_ACTION_TTL_MINUTES),
         "decidedAt": None,
+        "decidedBy": None,
         "decidedReason": None,
     }
     collection.insert_one(document)
@@ -47,16 +50,18 @@ def save_pending_action(
 def decide_pending_action(
     collection: Any,
     action_id: str,
+    decided_by: str,
     approve: bool,
     decided_reason: str | None,
 ) -> dict[str, Any] | None:
     now = datetime.now(UTC)
     return collection.find_one_and_update(
-        {"_id": action_id, "status": "pending", "expiresAt": {"$gt": now}},
+        {"_id": action_id, "requestedBy": decided_by, "status": "pending", "expiresAt": {"$gt": now}},
         {
             "$set": {
                 "status": "approved" if approve else "rejected",
                 "decidedAt": now,
+                "decidedBy": decided_by,
                 "decidedReason": decided_reason,
             }
         },

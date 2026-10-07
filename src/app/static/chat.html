@@ -22,6 +22,7 @@
     --error: #e08590; --tool: #9aa7bd;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body {
     margin: 0; font: 15px/1.5 'Inter', system-ui, sans-serif;
@@ -64,6 +65,16 @@
   .titlebar .title {
     font-weight: 700; font-size: 13px; letter-spacing: 0.04em; color: var(--muted);
   }
+
+  .app { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .login {
+    flex: 1; flex-direction: column; justify-content: center; gap: 12px;
+    width: min(340px, 100%); margin: 0 auto; padding: 24px;
+    background: none; border-top: 0;
+  }
+  .login h1 { margin: 0 0 4px; font-size: 1.1rem; letter-spacing: 0.02em; }
+  .login .error { margin: 0; min-height: 1.3em; font-size: 13px; color: var(--error); }
+  .who { font-size: 13px; color: var(--muted); }
 
   header {
     display: flex; gap: 10px; align-items: center; padding: 10px 16px;
@@ -181,20 +192,30 @@
   <div class="titlebar">
     <span class="title">Store Assistant</span>
   </div>
-  <header>
-    <strong>Store Assistant</strong>
-    <select id="assistant" aria-label="Assistant">
-      <option value="advisor">Product advisor</option>
-      <option value="analyst">Invoice analyst</option>
-    </select>
-    <input id="key" type="password" placeholder="X-API-Key" autocomplete="off">
-    <button id="reset" type="button">New conversation</button>
-  </header>
-  <div id="log"></div>
-  <form id="form">
-    <textarea id="input" placeholder="Type the customer's question. Enter to send, Shift+Enter for a new line."></textarea>
-    <button id="send" class="primary" type="submit">Send</button>
+  <form id="login" class="login" hidden>
+    <h1>Sign in</h1>
+    <input name="username" placeholder="Username" autocomplete="username" required>
+    <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button class="primary" type="submit">Sign in</button>
+    <p class="error" role="alert"></p>
   </form>
+  <div id="app" class="app" hidden>
+    <header>
+      <strong>Store Assistant</strong>
+      <select id="assistant" aria-label="Assistant">
+        <option value="advisor">Product advisor</option>
+        <option value="analyst">Invoice analyst</option>
+      </select>
+      <button id="reset" type="button">New conversation</button>
+      <span id="who" class="who"></span>
+      <button id="logout" type="button">Log out</button>
+    </header>
+    <div id="log"></div>
+    <form id="form">
+      <textarea id="input" placeholder="Type the customer's question. Enter to send, Shift+Enter for a new line."></textarea>
+      <button id="send" class="primary" type="submit">Send</button>
+    </form>
+  </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
@@ -210,9 +231,60 @@
   const log = document.getElementById("log");
   const input = document.getElementById("input");
   const send = document.getElementById("send");
-  const keyInput = document.getElementById("key");
   const assistantSelect = document.getElementById("assistant");
+  const analystOption = assistantSelect.querySelector('option[value="analyst"]');
+  const appEl = document.getElementById("app");
+  const loginForm = document.getElementById("login");
+  const loginError = loginForm.querySelector(".error");
+  const whoEl = document.getElementById("who");
+  const CHAT_ROLES = ["consultant", "manager"];
   let conversationId = null;
+  let accessToken = null;
+  let refreshing = null;
+
+  function showLogin(message = "") {
+    accessToken = null;
+    appEl.hidden = true;
+    loginForm.hidden = false;
+    loginError.textContent = message;
+    loginForm.username.focus();
+  }
+
+  function signedIn(body) {
+    if (!CHAT_ROLES.includes(body.role)) {
+      fetch("/auth/logout", { method: "POST" }).catch(() => {});
+      showLogin("This account has no access to the assistant.");
+      return false;
+    }
+    accessToken = body.access_token;
+    whoEl.textContent = `${body.username} · ${body.role}`;
+    const manager = body.role === "manager";
+    analystOption.hidden = !manager;
+    analystOption.disabled = !manager;
+    if (!manager && assistantSelect.value === "analyst") {
+      assistantSelect.value = "advisor";
+      input.placeholder = placeholders.advisor;
+    }
+    loginForm.hidden = true;
+    appEl.hidden = false;
+    return true;
+  }
+
+  function refreshSession() {
+    refreshing ??= fetch("/auth/refresh", { method: "POST" })
+      .then(async (response) => response.ok && signedIn(await response.json()))
+      .catch(() => false)
+      .finally(() => { refreshing = null; });
+    return refreshing;
+  }
+
+  async function authFetch(url, options = {}) {
+    const request = () => fetch(url, { ...options, headers: { ...options.headers, Authorization: `Bearer ${accessToken}` } });
+    let response = await request();
+    if (response.status === 401 && await refreshSession()) response = await request();
+    if (response.status === 401) showLogin("Your session ended. Sign in again.");
+    return response;
+  }
 
   const suggestionsByAssistant = {
     advisor: [
@@ -278,7 +350,7 @@
   async function addChart(chartId) {
     const el = add("msg assistant chart", "");
     try {
-      const response = await fetch(`/charts/${chartId}/image`, { headers: { "X-API-Key": keyInput.value } });
+      const response = await authFetch(`/charts/${chartId}/image`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const url = URL.createObjectURL(await response.blob());
       chartUrls.push(url);
@@ -361,9 +433,9 @@
     const buttons = el.querySelectorAll("button");
     buttons.forEach((b) => (b.disabled = true));
     try {
-      const response = await fetch(`/pending-actions/${actionId}/${verb}`, {
+      const response = await authFetch(`/pending-actions/${actionId}/${verb}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": keyInput.value },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
       const body = await response.json().catch(() => ({}));
@@ -398,9 +470,9 @@
     const stopThinking = () => { if (thinking) { thinking.remove(); thinking = null; } };
 
     try {
-      const response = await fetch("/chat", {
+      const response = await authFetch("/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": keyInput.value },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ conversation_id: conversationId, message, assistant: assistantSelect.value }),
       });
       if (!response.ok) {
@@ -475,6 +547,39 @@
       input.focus();
     }
   });
+
+  loginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    loginError.textContent = "";
+    const button = loginForm.querySelector("button");
+    button.disabled = true;
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginForm.username.value, password: loginForm.password.value }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        loginError.textContent = typeof body.detail === "string" ? body.detail : "Sign-in failed.";
+        return;
+      }
+      loginForm.password.value = "";
+      if (signedIn(body)) startConversation(`Signed in as ${body.username}.`);
+    } catch (err) {
+      loginError.textContent = `Request failed: ${err.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  document.getElementById("logout").addEventListener("click", async () => {
+    await fetch("/auth/logout", { method: "POST" }).catch(() => {});
+    startConversation("Signed out.");
+    showLogin();
+  });
+
+  refreshSession().then((ok) => { if (!ok) showLogin(); });
 </script>
 </body>
 </html>

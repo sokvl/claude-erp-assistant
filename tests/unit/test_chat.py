@@ -119,7 +119,7 @@ def _run(client, history=(), profile=ADVISOR):
 
 
 def _fail_tool(monkeypatch, error):
-    def failing_run_tool(db, name, tool_input, conversation_id=None):
+    def failing_run_tool(db, name, tool_input, conversation_id=None, username=None):
         raise error
 
     monkeypatch.setattr(chat, "run_tool", failing_run_tool)
@@ -136,7 +136,7 @@ def sleeps(monkeypatch):
 def tool_runs(monkeypatch):
     calls = []
 
-    def fake_run_tool(db, name, tool_input, conversation_id=None):
+    def fake_run_tool(db, name, tool_input, conversation_id=None, username=None):
         calls.append(name)
         return ToolOutput(TOOL_OUTPUT)
 
@@ -694,16 +694,18 @@ def test_run_turn_tool_without_an_artifact_yields_no_chart_ref(tool_runs):
     assert not any(isinstance(event, ChartRef) for event in events)
 
 
-# The conversation is what scopes a stored chart, so the id has to survive the trip
-# from the router through the agent loop to the tool.
-def test_run_turn_conversation_id_reaches_the_tool(monkeypatch):
+# The conversation and the signed-in user scope what a tool stores (a chart, a close
+# request), so both have to survive the trip from the router through the agent loop.
+def test_run_turn_conversation_id_and_username_reach_the_tool(monkeypatch):
     # Arrange
     seen = []
-    monkeypatch.setattr(chat, "run_tool", lambda db, name, tool_input, cid: seen.append(cid) or ToolOutput("{}"))
+    monkeypatch.setattr(
+        chat, "run_tool", lambda db, name, tool_input, cid, username: seen.append((cid, username)) or ToolOutput("{}")
+    )
     client = FakeClient(_tool_round(), _answer("Hi"))
 
     # Act
-    list(run_turn(client, None, ADVISOR, [], [], "question", None, "conv-7"))
+    list(run_turn(client, None, ADVISOR, [], [], "question", None, "conv-7", "anna"))
 
     # Assert
-    assert seen == ["conv-7"]
+    assert seen == [("conv-7", "anna")]

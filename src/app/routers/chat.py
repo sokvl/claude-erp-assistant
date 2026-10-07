@@ -24,13 +24,15 @@ from app.assistant.memory import ConversationStore, get_store
 from app.assistant.profiles import PROFILES, AssistantName
 from app.assistant.tools import TOOLS
 from app.assistant.usage import record_usage
+from app.auth.roles import Principal, Role, allows
 from app.db import get_database
 from app.limits import MAX_CHAT_MESSAGE_LENGTH, MAX_CONVERSATION_ID_LENGTH
-from app.security import require_api_key
+from app.security import require_role
+from app.vault import secret
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 class ChatRequest(BaseModel):
@@ -42,12 +44,25 @@ class ChatRequest(BaseModel):
 
 
 def assistant_client() -> anthropic.Anthropic:
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+    if not (secret("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Assistant is not configured: set ANTHROPIC_API_KEY",
         )
     return get_client()
+
+
+def chat_principal(
+    body: ChatRequest,
+    principal: Principal = Depends(require_role(Role.CONSULTANT)),
+) -> Principal:
+    required = PROFILES[body.assistant].role
+    if not allows(principal.role, required):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"The {body.assistant} assistant requires the {required} role",
+        )
+    return principal
 
 
 def chat_store(body: ChatRequest) -> ConversationStore:
@@ -60,10 +75,11 @@ def chat_tools(body: ChatRequest) -> list[dict[str, Any]]:
 
 def resolve_conversation(
     body: ChatRequest,
+    principal: Principal = Depends(chat_principal),
     store: ConversationStore = Depends(chat_store),
 ) -> tuple[str, list[dict[str, Any]]]:
-    conversation_id = body.conversation_id or store.create()
-    history = store.history(conversation_id)
+    conversation_id = body.conversation_id or store.create(principal.username)
+    history = store.history(conversation_id, principal.username)
     if history is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown conversation")
     return conversation_id, history
@@ -72,6 +88,7 @@ def resolve_conversation(
 @router.post("", response_class=EventSourceResponse)
 def chat(
     body: ChatRequest,
+    principal: Principal = Depends(chat_principal),
     client: anthropic.Anthropic = Depends(assistant_client),
     conversation: tuple[str, list[dict[str, Any]]] = Depends(resolve_conversation),
     tools: list[dict[str, Any]] = Depends(chat_tools),
@@ -84,7 +101,9 @@ def chat(
     steps: list[TraceStep] = []
     outcome = "closed"
     try:
-        for event in run_turn(client, db, profile, tools, history, body.message, steps, conversation_id):
+        for event in run_turn(
+            client, db, profile, tools, history, body.message, steps, conversation_id, principal.username
+        ):
             if isinstance(event, TextDelta):
                 yield ServerSentEvent(event="text", data={"text": event.text})
             elif isinstance(event, ToolCall):
