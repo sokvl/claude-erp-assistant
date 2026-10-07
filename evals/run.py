@@ -18,7 +18,6 @@ from app.assistant.dispatch import run_tool  # noqa: E402
 from app.assistant.profiles import PROFILES, Profile  # noqa: E402
 from app.assistant.tools import TOOLS  # noqa: E402
 from app.assistant.usage import cost_usd, total_tokens  # noqa: E402
-from app.config import API_KEY  # noqa: E402
 from app.db import get_database  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers import chat as chat_router  # noqa: E402
@@ -31,11 +30,13 @@ class Recorder:
         self.calls: list[dict[str, Any]] = []
         self.steps: list[chat.TraceStep] = []
 
-    def run_tool(self, db: Any, name: str, tool_input: Any, conversation_id: str | None = None) -> Any:
+    def run_tool(
+        self, db: Any, name: str, tool_input: Any, conversation_id: str | None = None, username: str | None = None
+    ) -> Any:
         call = {"name": name, "input": tool_input}
         self.calls.append(call)
         try:
-            output = run_tool(db, name, tool_input, conversation_id)
+            output = run_tool(db, name, tool_input, conversation_id, username)
         except Exception as error:
             call["error"] = str(error)
             raise
@@ -73,7 +74,7 @@ def full_flow(case: Case, recorder: Recorder, http: TestClient) -> tuple[str, li
     for question in case.turns:
         recorder.calls.clear()
         body = {"message": question, "conversation_id": conversation_id, "assistant": case.assistant}
-        response = http.post("/chat", json=body, headers={"X-API-Key": API_KEY})
+        response = http.post("/chat", json=body, headers={"X-API-Key": os.environ["EVALS_API_KEY"]})
         events = parse_sse(response.text) if response.status_code == 200 else [("error", {"status": response.status_code})]
         conversation_id = next((data["conversation_id"] for name, data in events if name == "conversation"), conversation_id)
         if events[-1][0] != "done":
@@ -121,6 +122,8 @@ def main() -> int:
         parser.error(f"unknown case ids: {sorted(unknown)}")
     if not os.environ.get("ANTHROPIC_API_KEY"):
         parser.error("ANTHROPIC_API_KEY is not set; add it to .env")
+    if not os.environ.get("EVALS_API_KEY"):
+        parser.error("EVALS_API_KEY is not set; issue one for a manager with `python -m app.cli issue-api-key`")
 
     db = get_database()
     catalog = {doc["_id"]: doc for doc in db["products"].find({}, {"listPrice": 1, "category": 1})}
