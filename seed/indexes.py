@@ -32,6 +32,10 @@ the collection, so every pending action must carry `expiresAt`. Deciding also
 checks `expiresAt` in its filter, because the TTL sweep runs about once a minute
 rather than exactly on expiry.
 
+conversations - one document per chat, holding its turns, so reopening one is
+a single _id read. expiresAt is the TTL and moves with every turn, so a chat
+lives CONVERSATION_TTL_DAYS after its last message.
+
 refresh_tokens - one document per issued refresh token, keyed by its SHA-256,
 so the token itself is never stored. expiresAt is the TTL; familyId lets one
 update revoke every token of a session when a used token is replayed.
@@ -68,6 +72,10 @@ CHART_INDEXES = [
 ]
 
 PENDING_ACTION_INDEXES = [
+    IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
+]
+
+CONVERSATION_INDEXES = [
     IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
 ]
 

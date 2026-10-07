@@ -1,6 +1,7 @@
 import logging
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any
 
 import anthropic
@@ -20,7 +21,7 @@ from app.assistant.chat import (
     get_client,
     run_turn,
 )
-from app.assistant.memory import ConversationStore, get_store
+from app.assistant.conversations import CONVERSATION_COLLECTION, ConversationStore, History
 from app.assistant.profiles import PROFILES, AssistantName
 from app.assistant.tools import TOOLS
 from app.assistant.usage import record_usage
@@ -65,8 +66,8 @@ def chat_principal(
     return principal
 
 
-def chat_store(body: ChatRequest) -> ConversationStore:
-    return get_store(body.assistant)
+def chat_store(body: ChatRequest, db: Database = Depends(get_database)) -> ConversationStore:
+    return ConversationStore(db[CONVERSATION_COLLECTION], body.assistant)
 
 
 def chat_tools(body: ChatRequest) -> list[dict[str, Any]]:
@@ -77,8 +78,8 @@ def resolve_conversation(
     body: ChatRequest,
     principal: Principal = Depends(chat_principal),
     store: ConversationStore = Depends(chat_store),
-) -> tuple[str, list[dict[str, Any]]]:
-    conversation_id = body.conversation_id or store.create(principal.username)
+) -> tuple[str, History]:
+    conversation_id = body.conversation_id or store.create(principal.username, body.message, datetime.now(UTC))
     history = store.history(conversation_id, principal.username)
     if history is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown conversation")
@@ -90,7 +91,7 @@ def chat(
     body: ChatRequest,
     principal: Principal = Depends(chat_principal),
     client: anthropic.Anthropic = Depends(assistant_client),
-    conversation: tuple[str, list[dict[str, Any]]] = Depends(resolve_conversation),
+    conversation: tuple[str, History] = Depends(resolve_conversation),
     tools: list[dict[str, Any]] = Depends(chat_tools),
     db: Database = Depends(get_database),
     store: ConversationStore = Depends(chat_store),
@@ -99,16 +100,18 @@ def chat(
     conversation_id, history = conversation
     yield ServerSentEvent(event="conversation", data={"conversation_id": conversation_id})
     steps: list[TraceStep] = []
+    chart_ids: list[str] = []
     outcome = "closed"
     try:
         for event in run_turn(
-            client, db, profile, tools, history, body.message, steps, conversation_id, principal.username
+            client, db, profile, tools, history.messages, body.message, steps, conversation_id, principal.username
         ):
             if isinstance(event, TextDelta):
                 yield ServerSentEvent(event="text", data={"text": event.text})
             elif isinstance(event, ToolCall):
                 yield ServerSentEvent(event="tool", data={"name": event.name})
             elif isinstance(event, ChartRef):
+                chart_ids.append(event.chart_id)
                 yield ServerSentEvent(event="chart", data={"chart_id": event.chart_id})
             elif isinstance(event, PendingActionRef):
                 yield ServerSentEvent(
@@ -120,7 +123,10 @@ def chat(
                     },
                 )
             elif isinstance(event, Answer):
-                if not store.append_turn(conversation_id, len(history), body.message, event.text):
+                saved = store.append_turn(
+                    conversation_id, history.turns, body.message, event.text, chart_ids, datetime.now(UTC)
+                )
+                if not saved:
                     raise ChatError("conflict")
                 outcome = "done"
                 yield ServerSentEvent(event="done", data={"truncated": event.truncated})

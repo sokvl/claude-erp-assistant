@@ -68,3 +68,6 @@ def _apply(document, update):
     document.update(update.get("$set", {}))
     for key, amount in update.get("$inc", {}).items():
         document[key] = document.get(key, 0) + amount
+    for key, push in update.get("$push", {}).items():
+        items = document.get(key, []) + push["$each"]
+        document[key] = items[push["$slice"]:] if "$slice" in push else items

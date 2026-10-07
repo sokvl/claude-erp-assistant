@@ -2,10 +2,10 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from memory_collection import MemoryCollection
 
 from app.assistant.chat import ERROR_MESSAGES, Answer, ChartRef, ChatError, TextDelta, ToolCall, TraceStep
-from app.assistant import memory
-from app.assistant.memory import ConversationStore
+from app.assistant.conversations import CONVERSATION_COLLECTION, ConversationStore
 from app.assistant.profiles import AssistantName
 from app.assistant.usage import USAGE_COLLECTION
 from app.auth.roles import Principal, Role
@@ -69,14 +69,17 @@ def usage():
 
 @pytest.fixture
 def store(usage):
-    fresh = ConversationStore()
-    app.dependency_overrides[get_database] = lambda: {USAGE_COLLECTION: usage}
+    conversations = MemoryCollection()
+    app.dependency_overrides[get_database] = lambda: {USAGE_COLLECTION: usage, CONVERSATION_COLLECTION: conversations}
     app.dependency_overrides[current_principal] = lambda: MANAGER
-    app.dependency_overrides[chat_store] = lambda: fresh
     app.dependency_overrides[assistant_client] = lambda: object()
     app.dependency_overrides[chat_tools] = lambda: []
-    yield fresh
+    yield conversations
     app.dependency_overrides.clear()
+
+
+def _saved(conversations, conversation_id):
+    return conversations.documents[conversation_id]["messages"]
 
 
 @pytest.fixture
@@ -111,9 +114,9 @@ def test_chat_successful_turn_saves_only_question_and_answer(client, store, monk
     events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
-    assert store.history(events[0][1]["conversation_id"], "anna") == [
+    assert _saved(store, events[0][1]["conversation_id"]) == [
         {"role": "user", "content": "question"},
-        {"role": "assistant", "content": "Hi"},
+        {"role": "assistant", "content": "Hi", "chartIds": []},
     ]
 
 
@@ -149,12 +152,12 @@ def test_chat_failed_turn_does_not_save_history(client, store, monkeypatch, fail
     events = _events(client.post("/chat", json={"message": "question"}))
 
     # Assert
-    assert store.history(events[0][1]["conversation_id"], "anna") == []
+    assert _saved(store, events[0][1]["conversation_id"]) == []
 
 
-def test_chat_history_changed_during_turn_reports_conflict(client, monkeypatch):
+def test_chat_history_changed_during_turn_reports_conflict(client, store, monkeypatch):
     # Arrange
-    app.dependency_overrides[chat_store] = lambda: ConflictingStore()
+    app.dependency_overrides[chat_store] = lambda: ConflictingStore(store, AssistantName.ADVISOR)
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
 
     # Act
@@ -278,9 +281,7 @@ def test_chat_analyst_turn_records_usage_under_the_analyst(client, usage, monkey
 
 
 def test_chat_conversation_of_the_other_assistant_is_unknown(client, monkeypatch):
-    # Arrange: real per-assistant stores, so advisor history can never reach the analyst's context or vice versa
-    app.dependency_overrides.pop(chat_store)
-    monkeypatch.setattr(memory, "stores", {assistant: ConversationStore() for assistant in AssistantName})
+    # Arrange: a conversation is pinned to its assistant, so advisor history never reaches the analyst's context
     monkeypatch.setattr(chat_router, "run_turn", _scripted_turn(Answer("Hi", truncated=False)))
     advisor_events = _events(client.post("/chat", json={"message": "question"}))
     conversation_id = advisor_events[0][1]["conversation_id"]
@@ -295,9 +296,9 @@ def test_chat_conversation_of_the_other_assistant_is_unknown(client, monkeypatch
     assert response.status_code == 404
 
 
-# The page needs the id to fetch the image with the API key; the chart itself is
-# never written to conversation memory, only the question and the answer text.
-def test_chat_turn_with_a_chart_streams_its_id_and_keeps_it_out_of_memory(client, store, monkeypatch):
+# The page fetches the image by id; the saved answer keeps the id so a reopened
+# conversation can show the chart again, while the model only ever gets the text.
+def test_chat_turn_with_a_chart_streams_its_id_and_saves_it_with_the_answer(client, store, monkeypatch):
     # Arrange
     monkeypatch.setattr(
         chat_router,
@@ -316,9 +317,9 @@ def test_chat_turn_with_a_chart_streams_its_id_and_keeps_it_out_of_memory(client
     # Assert
     assert [name for name, _ in events] == ["conversation", "tool", "chart", "text", "done"]
     assert dict(events)["chart"] == {"chart_id": "chart-1"}
-    assert store.history(events[0][1]["conversation_id"], "anna") == [
+    assert _saved(store, events[0][1]["conversation_id"]) == [
         {"role": "user", "content": "trend"},
-        {"role": "assistant", "content": "Revenue rose."},
+        {"role": "assistant", "content": "Revenue rose.", "chartIds": ["chart-1"]},
     ]
 
 

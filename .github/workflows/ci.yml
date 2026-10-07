@@ -7,9 +7,11 @@ on:
     branches: [main, dev]
   workflow_dispatch:
 
+# Only superseded pull-request runs are cancelled; a push to main or dev publishes an
+# image, and cancelling it mid-build left that commit without one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PYTHON_VERSION: "3.14"
@@ -131,8 +133,12 @@ jobs:
             ${{ steps.meta.outputs.tags }}
             invoice-api:ci
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # One cache scope per branch, so two builds never race for the same entry; a cache
+          # write that still fails must not fail the build.
+          cache-from: |
+            type=gha,scope=${{ github.head_ref || github.ref_name }}
+            type=gha,scope=main
+          cache-to: type=gha,mode=max,scope=${{ github.head_ref || github.ref_name }},ignore-error=true
 
       - name: Smoke test
         run: |
