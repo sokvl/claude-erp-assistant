@@ -23,6 +23,7 @@ from pymongo import MongoClient, UpdateOne
 from indexes import (
     API_KEY_INDEXES,
     CHART_INDEXES,
+    CONVERSATION_INDEXES,
     INVOICE_INDEXES,
     LOGIN_ATTEMPT_INDEXES,
     PENDING_ACTION_INDEXES,
@@ -109,6 +110,7 @@ def main():
     sync_indexes(database["refresh_tokens"], REFRESH_TOKEN_INDEXES)
     sync_indexes(database["login_attempts"], LOGIN_ATTEMPT_INDEXES)
     sync_indexes(database["api_keys"], API_KEY_INDEXES)
+    sync_indexes(database["conversations"], CONVERSATION_INDEXES)
 
     start = datetime.now()
     total = 0
