@@ -20,6 +20,7 @@ instead of a toy chat wrapper.
 The advisor searches the catalog and quotes SKUs and list prices exactly as returned, never
 naming a product it did not just retrieve.
 
+
 ![Product lookup](media/lookup.gif)
 
 One `chart_invoices` call returns the rows *and* a rendered PNG, so the answer carries a table and
