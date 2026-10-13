@@ -15,9 +15,11 @@ Schema notes:
 """
 
 import argparse
+import os
 from datetime import datetime
 
 import pandas as pd
+from dotenv import load_dotenv
 from pymongo import MongoClient, UpdateOne
 
 from indexes import (
@@ -91,9 +93,10 @@ def row_to_document(row: pd.Series) -> dict:
 
 
 def main():
+    load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", default="seed/dataset.csv")
-    parser.add_argument("--uri", default="mongodb://localhost:27017")
+    parser.add_argument("--uri", default=os.environ.get("MONGO_URI", "mongodb://localhost:27017"))
     parser.add_argument("--db", default="invoices_db")
     parser.add_argument("--collection", default="invoices")
     parser.add_argument("--batch-size", type=int, default=2000)
