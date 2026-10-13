@@ -1,17 +1,19 @@
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import pytest
 from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import OperationFailure, PyMongoError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "seed"))
 
 from indexes import PRODUCT_INDEXES, sync_indexes  # noqa: E402
 
-URI = "mongodb://localhost:27017"
+URI = os.environ.get("MONGO_TEST_URI", "mongodb://localhost:27017")
+ADDRESS = f"{urlsplit(URI).hostname}:{urlsplit(URI).port or 27017}"
 
 
 def _gpu(sku, name, brand, price, vram, fp16, pooling, arch, memory, use_cases, **extra):
@@ -52,10 +54,12 @@ def mongo_client():
     client = MongoClient(URI, serverSelectionTimeoutMS=1000)
     try:
         client.admin.command("ping")
+    except OperationFailure as exc:
+        pytest.fail(f"MongoDB at {ADDRESS} rejected MONGO_TEST_URI: {exc.details.get('codeName')}")
     except PyMongoError:
         if os.environ.get("REQUIRE_MONGO"):
-            pytest.fail("MongoDB not reachable on localhost:27017")
-        pytest.skip("MongoDB not reachable on localhost:27017")
+            pytest.fail(f"MongoDB not reachable at {ADDRESS}")
+        pytest.skip(f"MongoDB not reachable at {ADDRESS}")
     yield client
     client.close()
 

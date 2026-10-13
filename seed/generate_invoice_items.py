@@ -17,9 +17,11 @@ to 1x by retrying compositions, not applied as a blind multiplier.
 
 import argparse
 import math
+import os
 import random
 
 import pandas as pd
+from dotenv import load_dotenv
 from pymongo import MongoClient, UpdateOne
 
 from indexes import PRODUCT_INDEXES, sync_indexes
@@ -108,9 +110,10 @@ def load_invoices(csv_path: str) -> pd.DataFrame:
 
 
 def main():
+    load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", default="seed/dataset.csv")
-    parser.add_argument("--uri", default="mongodb://localhost:27017")
+    parser.add_argument("--uri", default=os.environ.get("MONGO_URI", "mongodb://localhost:27017"))
     parser.add_argument("--db", default="invoices_db")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch-size", type=int, default=2000)

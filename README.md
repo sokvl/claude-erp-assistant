@@ -20,6 +20,7 @@ instead of a toy chat wrapper.
 The advisor searches the catalog and quotes SKUs and list prices exactly as returned, never
 naming a product it did not just retrieve.
 
+
 ![Product lookup](media/lookup.gif)
 
 One `chart_invoices` call returns the rows *and* a rendered PNG, so the answer carries a table and
@@ -162,6 +163,4 @@ Still being built. Next up:
   spec the catalog does not carry, still grounded in a retrieved source rather than model memory.
 * **Account admin panel.** The admin role exists; accounts and API keys are still managed from
   the command line.
-* **MongoDB authentication.** Vault already holds the connection string; the database itself
-  still runs without a password locally.
 

@@ -3,9 +3,12 @@ services:
     image: mongo:7
     container_name: invoices_mongo
     restart: unless-stopped
-    command: ["--wiredTigerCollectionBlockCompressor=zstd"]
+    command: ["--auth", "--wiredTigerCollectionBlockCompressor=zstd"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env}
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
 
@@ -24,7 +27,7 @@ services:
     build: .
     env_file: .env
     environment:
-      MONGO_URI: mongodb://mongo:27017
+      MONGO_URI: mongodb://invoices_app:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}@mongo:27017/invoices_db?authSource=admin
       VAULT_ADDR: http://vault:8200
       VAULT_ROLE_ID_FILE: /run/secrets/vault_role_id
       VAULT_SECRET_ID_FILE: /run/secrets/vault_secret_id
