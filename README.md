@@ -163,6 +163,4 @@ Still being built. Next up:
   spec the catalog does not carry, still grounded in a retrieved source rather than model memory.
 * **Account admin panel.** The admin role exists; accounts and API keys are still managed from
   the command line.
-* **MongoDB authentication.** Vault already holds the connection string; the database itself
-  still runs without a password locally.
 
