@@ -77,9 +77,10 @@ def request_close(
 
 
 def close_invoice(collection: Any, invoice_id: str, reason: str) -> bool:
+    now = datetime.now(UTC)
     result = collection.update_one(
         {"_id": invoice_id, "isOpen": True},
-        {"$set": {"isOpen": False, "closedAt": datetime.now(UTC), "closedReason": reason}},
+        {"$set": {"isOpen": False, "closedAt": now, "closedReason": reason, "updatedAt": now}},
     )
     return result.modified_count > 0
 
