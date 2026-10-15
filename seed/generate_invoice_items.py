@@ -32,8 +32,8 @@ SIZE_BRACKETS = [
     (50, (1, 1), ["accessory"]),
     (500, (1, 2), ["accessory", "component"]),
     (3000, (1, 3), ["component", "gpu_consumer"]),
-    (20000, (2, 4), ["gpu_consumer", "component", "enterprise"]),
-    (float("inf"), (2, 5), ["enterprise", "gpu_consumer"]),
+    (20000, (2, 4), ["gpu_consumer", "component", "enterprise", "fleet"]),
+    (float("inf"), (2, 5), ["enterprise", "gpu_consumer", "fleet"]),
 ]
 
 MAX_ATTEMPTS = 10
@@ -117,6 +117,7 @@ def main():
     parser.add_argument("--db", default="invoices_db")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch-size", type=int, default=2000)
+    parser.add_argument("--products-only", action="store_true", help="load the catalog and skip rewriting invoice lines")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
@@ -130,6 +131,8 @@ def main():
     product_ops = [UpdateOne({"_id": p["sku"]}, {"$set": {**p, "_id": p["sku"]}}, upsert=True) for p in PRODUCTS]
     products_col.bulk_write(product_ops, ordered=False)
     print(f"Upserted {len(PRODUCTS)} products")
+    if args.products_only:
+        return
 
     invoices_col = db["invoices"]
     ops = []
