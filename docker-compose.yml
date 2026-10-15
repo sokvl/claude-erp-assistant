@@ -18,6 +18,38 @@ services:
         aliases:
           - mongo1.localhost
 
+  mongo2:
+    image: mongo:7
+    container_name: invoices_mongo2
+    restart: unless-stopped
+    entrypoint: ["bash", "-c", "install -m 400 -o 999 -g 999 /run/mongo-keyfile /tmp/keyfile && exec docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["mongod", "--auth", "--replSet", "rs0", "--keyFile", "/tmp/keyfile", "--bind_ip_all", "--port", "27018", "--wiredTigerCollectionBlockCompressor=zstd"]
+    ports:
+      - "127.0.0.1:27018:27018"
+    volumes:
+      - mongo2_data:/data/db
+      - ./deploy/mongo/keyfile:/run/mongo-keyfile:ro,z
+    networks:
+      default:
+        aliases:
+          - mongo2.localhost
+
+  mongo3:
+    image: mongo:7
+    container_name: invoices_mongo3
+    restart: unless-stopped
+    entrypoint: ["bash", "-c", "install -m 400 -o 999 -g 999 /run/mongo-keyfile /tmp/keyfile && exec docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["mongod", "--auth", "--replSet", "rs0", "--keyFile", "/tmp/keyfile", "--bind_ip_all", "--port", "27019", "--wiredTigerCollectionBlockCompressor=zstd"]
+    ports:
+      - "127.0.0.1:27019:27019"
+    volumes:
+      - mongo3_data:/data/db
+      - ./deploy/mongo/keyfile:/run/mongo-keyfile:ro,z
+    networks:
+      default:
+        aliases:
+          - mongo3.localhost
+
   vault:
     image: hashicorp/vault:1.20
     container_name: invoices_vault
@@ -48,3 +80,5 @@ services:
 
 volumes:
   mongo_data:
+  mongo2_data:
+  mongo3_data:
