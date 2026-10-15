@@ -51,9 +51,9 @@ is the TTL, so a lockout lifts itself once the window passes.
 
 users - keyed by the username, so the _id index is the unique one it needs.
 
-products - 52 documents fit in one storage page, where a collection scan beats
-any index lookup, and every spec field lives on the 11 GPUs that `category`
-already isolates. (category, listPrice) is kept for the primary shape: a
+products - under a hundred documents fit in a few storage pages, where a collection scan beats
+any index lookup, and every spec field a search filters or sorts on lives on
+the 11 GPUs that `category` already isolates. (category, listPrice) is kept for the primary shape: a
 category with a budget or a price sort. Add more when explain shows a hot shape
 examining far more documents than it returns.
 """

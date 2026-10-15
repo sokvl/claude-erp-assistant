@@ -48,7 +48,7 @@ class CloseInvoiceInput(BaseModel):
 
 
 SEARCH_PRODUCTS_DESCRIPTION = """
-Search the hardware distributor's product catalog: GPUs, CPUs, RAM, storage, motherboards, PSUs, cases, cooling, monitors, networking and accessories. Returns {page, pageSize, total, items}; each item has sku, name, brand, category, listPrice (USD per unit) and, for GPUs only, a specs object (VRAM, memory type, FP16 throughput, TDP, interconnect, multi-GPU scaling, use cases, release year).
+Search the hardware distributor's product catalog: GPUs, CPUs, RAM, storage, motherboards, PSUs, cases, cooling, monitors, networking, accessories, laptops, servers, UPS units and rack equipment. Returns {page, pageSize, total, items}; each item has sku, name, brand, category, listPrice (USD per unit) and, for most categories, a specs object. GPU specs are VRAM, memory type, FP16 throughput, TDP, interconnect, multi-GPU scaling, use cases and release year. Other categories have fields of their own, such as a laptop's CPU, RAM and screen, a server's sockets, RAM and drive bays, or a UPS's capacity and topology: read them from the result and never assume a field exists.
 
 Use this for any question about which products exist, what they cost, how they compare, or which hardware fits a workload. Answer product questions from its results, never from memory. All filters are optional and combine with AND.
 
@@ -59,6 +59,7 @@ Map requests to filters:
 - Budget ("under $2,000") -> max_price.
 - "Fastest", "newest", "cheapest" -> sort_by with sort_order, not a threshold.
 - A workload larger than any single card -> requires_pooling=true, and tell the user it needs several cards.
+- Laptops, servers, UPS units and rack equipment have no spec filters: set category, add brand and max_price when given, and compare the specs in the results.
 
 Do not:
 - Guess values outside the listed enums; pick the matching value or omit the filter.
