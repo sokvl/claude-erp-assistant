@@ -7,3 +7,4 @@ evals/results/
 deploy/vault/role_id
 deploy/vault/secret_id
 backups/
+deploy/mongo/keyfile
