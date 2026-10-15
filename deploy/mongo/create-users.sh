@@ -41,4 +41,4 @@ JS
 
 docker exec \
   -e MONGO_ROOT_PASSWORD -e MONGO_APP_PASSWORD -e MONGO_TEST_PASSWORD \
-  "${MONGO_CONTAINER:-invoices_mongo}" mongosh --quiet --norc admin --eval "$SCRIPT"
+  "${MONGO_CONTAINER:-invoices_mongo}" mongosh --quiet --norc "mongodb://mongo1.localhost:27017,mongo2.localhost:27018,mongo3.localhost:27019/admin?replicaSet=rs0" --eval "$SCRIPT"

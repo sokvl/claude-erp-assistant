@@ -3,6 +3,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
+from pymongo import WriteConcern
 from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
@@ -10,6 +11,7 @@ from app.assistant.chat import TraceStep
 from app.assistant.profiles import ADVISOR_MODEL, ANALYST_MODEL, Profile
 
 USAGE_COLLECTION = "chat_usage"
+USAGE_WRITE_CONCERN = WriteConcern(w=1)
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 PRICE_PER_MILLION_TOKENS = {
     ADVISOR_MODEL: {
@@ -60,6 +62,6 @@ def record_usage(
         "costUsd": cost_usd(tokens, profile.model),
     }
     try:
-        db[USAGE_COLLECTION].insert_one(document)
+        db[USAGE_COLLECTION].with_options(write_concern=USAGE_WRITE_CONCERN).insert_one(document)
     except PyMongoError:
         logger.exception("could not record token usage for conversation %s", conversation_id)

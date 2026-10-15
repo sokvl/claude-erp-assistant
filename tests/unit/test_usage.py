@@ -5,7 +5,14 @@ from pymongo.errors import ServerSelectionTimeoutError
 
 from app.assistant.chat import TraceStep
 from app.assistant.profiles import ADVISOR, ADVISOR_MODEL, ANALYST, ANALYST_MODEL, PROFILES
-from app.assistant.usage import PRICE_PER_MILLION_TOKENS, USAGE_COLLECTION, cost_usd, record_usage, total_tokens
+from app.assistant.usage import (
+    PRICE_PER_MILLION_TOKENS,
+    USAGE_COLLECTION,
+    USAGE_WRITE_CONCERN,
+    cost_usd,
+    record_usage,
+    total_tokens,
+)
 
 ZERO = {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
 
@@ -24,6 +31,11 @@ class Collection:
     def __init__(self, error=None):
         self.documents = []
         self.error = error
+        self.write_concern = None
+
+    def with_options(self, write_concern):
+        self.write_concern = write_concern
+        return self
 
     def insert_one(self, document):
         if self.error:
@@ -134,3 +146,16 @@ def test_recordUsage_analystTurn_storesAnalystModelAndItsCost():
         ANALYST_MODEL,
         pytest.approx(3.00),
     )
+
+
+# Usage rows are bookkeeping: losing a few to a rollback after a failover only
+# undercounts the cost report, so they skip waiting for a second node to copy them.
+def test_recordUsage_turn_writesWithPrimaryOnlyAcknowledgement():
+    # Arrange
+    collection = Collection()
+
+    # Act
+    record_usage({USAGE_COLLECTION: collection}, "conv-1", ADVISOR, [_call(10, 1)], "done")
+
+    # Assert
+    assert (collection.write_concern, USAGE_WRITE_CONCERN.document) == (USAGE_WRITE_CONCERN, {"w": 1})
