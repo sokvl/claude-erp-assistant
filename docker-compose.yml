@@ -3,6 +3,7 @@ services:
     image: mongo:7
     container_name: invoices_mongo
     restart: unless-stopped
+    stop_grace_period: 60s
     entrypoint: ["bash", "-c", "install -m 400 -o 999 -g 999 /run/mongo-keyfile /tmp/keyfile && exec docker-entrypoint.sh \"$$@\"", "--"]
     command: ["mongod", "--auth", "--replSet", "rs0", "--keyFile", "/tmp/keyfile", "--bind_ip_all", "--port", "27017", "--wiredTigerCollectionBlockCompressor=zstd"]
     environment:
@@ -22,6 +23,7 @@ services:
     image: mongo:7
     container_name: invoices_mongo2
     restart: unless-stopped
+    stop_grace_period: 60s
     entrypoint: ["bash", "-c", "install -m 400 -o 999 -g 999 /run/mongo-keyfile /tmp/keyfile && exec docker-entrypoint.sh \"$$@\"", "--"]
     command: ["mongod", "--auth", "--replSet", "rs0", "--keyFile", "/tmp/keyfile", "--bind_ip_all", "--port", "27018", "--wiredTigerCollectionBlockCompressor=zstd"]
     ports:
@@ -38,6 +40,7 @@ services:
     image: mongo:7
     container_name: invoices_mongo3
     restart: unless-stopped
+    stop_grace_period: 60s
     entrypoint: ["bash", "-c", "install -m 400 -o 999 -g 999 /run/mongo-keyfile /tmp/keyfile && exec docker-entrypoint.sh \"$$@\"", "--"]
     command: ["mongod", "--auth", "--replSet", "rs0", "--keyFile", "/tmp/keyfile", "--bind_ip_all", "--port", "27019", "--wiredTigerCollectionBlockCompressor=zstd"]
     ports:
