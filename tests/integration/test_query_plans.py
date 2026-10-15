@@ -21,6 +21,7 @@ MARCH_2019 = {"posted_from": date(2019, 3, 1), "posted_to": date(2019, 3, 31)}
 POSTING = "dates.postingDate_1__id_1"
 STATUS = "isOpen_1_dates.postingDate_1__id_1"
 AMOUNT = "amounts.totalOpen_1__id_1"
+UPDATED = "updatedAt_1__id_1"
 INTERSECTIONS = {"AND_HASH", "AND_SORTED"}
 
 
@@ -37,6 +38,7 @@ def _invoice(i):
         "currency": "CAD" if i % 10 == 3 else "USD",
         "amounts": {"totalOpen": float(i * 7919 % 100_000)},
         "isOpen": is_open,
+        "updatedAt": posted,
         "dates": {
             "postingDate": posted,
             "dueInDate": posted + timedelta(days=30),
@@ -67,6 +69,16 @@ def _list(**params):
     return {
         "find": "invoices", "filter": query["filter"], "projection": query["projection"],
         "sort": dict(query["sort"]), "skip": query["skip"], "limit": query["limit"],
+    }
+
+
+def _changed(first_day, last_day):
+    # the lake's incremental extract: a time window, read in (updatedAt, _id) order
+    since = datetime(2019, 1, 1) + timedelta(days=first_day)
+    until = datetime(2019, 1, 1) + timedelta(days=last_day)
+    return {
+        "find": "invoices", "filter": {"updatedAt": {"$gte": since, "$lt": until}},
+        "sort": {"updatedAt": 1, "_id": 1},
     }
 
 
@@ -151,6 +163,7 @@ def _examined(explain):
         (_list(**MARCH_2019), POSTING, PAGE_SIZE),
         (_coverage(1), POSTING, 1),
         (_coverage(-1), POSTING, 1),
+        (_changed(100, 120), UPDATED, 21),
         (_count(status="open"), STATUS, None),
         (_count(**MARCH_2019), POSTING, None),
         (_analytics(group_by="month", **MARCH_2019), POSTING, None),
@@ -158,7 +171,8 @@ def _examined(explain):
         (_analytics(status="overdue", group_by="customer"), STATUS, None),
     ],
     ids=["list_newest_first", "list_oldest_first", "list_open", "list_cleared", "list_overdue", "list_largest_first",
-         "list_min_amount_largest_first", "list_posting_range", "coverage_first", "coverage_last", "count_open",
+         "list_min_amount_largest_first", "list_posting_range", "coverage_first", "coverage_last", "changed_window",
+         "count_open",
          "count_posting_range", "analytics_posting_range_by_month", "analytics_open_in_range",
          "analytics_overdue_by_customer"],
 )

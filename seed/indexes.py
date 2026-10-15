@@ -11,6 +11,8 @@ invoices - equality, then sort, then range; `_id` is the pagination tiebreaker:
   status counts. Overdue adds `dueInDate` as a residual filter; overdue is a
   subset of open, so a fourth key would widen the index for little gain.
 - (totalOpen, _id): largest/smallest-first lists and amount ranges.
+- (updatedAt, _id): the data lake's incremental extract, a time window read in
+  order with `_id` as the resume point. Every write to an invoice sets updatedAt.
 - customer.number and customer.nameLower: the two branches of the customer
   `$or`; nameLower is matched with a left-anchored prefix so both are bounded.
 No currency index: two values, and analytics already splits per currency. No
@@ -62,6 +64,7 @@ INVOICE_INDEXES = [
     IndexModel([("dates.postingDate", ASCENDING), ("_id", ASCENDING)]),
     IndexModel([("isOpen", ASCENDING), ("dates.postingDate", ASCENDING), ("_id", ASCENDING)]),
     IndexModel([("amounts.totalOpen", ASCENDING), ("_id", ASCENDING)]),
+    IndexModel([("updatedAt", ASCENDING), ("_id", ASCENDING)]),
     IndexModel([("customer.number", ASCENDING)]),
     IndexModel([("customer.nameLower", ASCENDING)]),
 ]

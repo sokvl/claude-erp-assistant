@@ -4,7 +4,7 @@ import random
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from dotenv import load_dotenv
 from generate_invoice_items import build_line_items
@@ -18,6 +18,7 @@ AMOUNT_SPREAD = (0.85, 1.15)
 MIN_AMOUNT = 0.01
 DUPLICATE_KEY = 11000
 REPORT_EVERY = 20
+DEFAULT_FIRST_DAY = date(2018, 1, 1)
 
 
 @dataclass(frozen=True)
@@ -141,9 +142,7 @@ def load_pools(collection):
         "customer": 1, "currency": 1, "businessCode": 1, "paymentTerms": 1,
         "documentType": 1, "postingId": 1, "amounts.totalOpen": 1, "dates": 1,
     }
-    documents = list(collection.find({"source": {"$exists": False}}, projection))
-    last_posting = max(document["dates"]["postingDate"] for document in documents)
-    return build_pools(documents), last_posting
+    return build_pools(collection.find({"source": {"$exists": False}}, projection))
 
 
 def existing_ids(collection, ids):
@@ -193,6 +192,8 @@ def main():
     parser.add_argument("--count", type=int, default=1_000_000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch-size", type=int, default=5_000)
+    parser.add_argument("--from", dest="first_day", type=date.fromisoformat, default=DEFAULT_FIRST_DAY)
+    parser.add_argument("--to", dest="last_day", type=date.fromisoformat, default=None, help="default: today")
     parser.add_argument("--purge", action="store_true", help="delete every synthetic invoice and exit")
     args = parser.parse_args()
 
@@ -201,10 +202,12 @@ def main():
         print(f"Deleted {purge(collection)} synthetic invoices")
         return
 
-    pools, last_posting = load_pools(collection)
     now = datetime.now(UTC).replace(tzinfo=None)
-    start = last_posting + timedelta(days=1)
-    end = datetime(now.year, now.month, now.day)
+    start = datetime.combine(args.first_day, datetime.min.time())
+    end = datetime.combine(args.last_day or now.date(), datetime.min.time())
+    if start > end:
+        parser.error(f"--from {start.date()} is after --to {end.date()}")
+    pools = load_pools(collection)
     started = time.perf_counter()
 
     def report(done, inserted, skipped):

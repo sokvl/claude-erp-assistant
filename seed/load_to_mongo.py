@@ -16,7 +16,7 @@ Schema notes:
 
 import argparse
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -116,11 +116,12 @@ def main():
     sync_indexes(database["conversations"], CONVERSATION_INDEXES)
 
     start = datetime.now()
+    loaded_at = datetime.now(UTC)
     total = 0
     ops = []
     for _, row in df.iterrows():
         doc = row_to_document(row)
-        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": doc}, upsert=True))
+        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": doc, "$setOnInsert": {"updatedAt": loaded_at}}, upsert=True))
         if len(ops) >= args.batch_size:
             collection.bulk_write(ops, ordered=False)
             total += len(ops)
