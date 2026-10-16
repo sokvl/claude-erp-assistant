@@ -49,7 +49,8 @@ for _ in $(seq 120); do
   [ "$state" = SECONDARY ] || [ "$state" = PRIMARY ] && break
   sleep 1
 done
-echo "old primary $node is now $state, new primary $(root_eval 'print(db.hello().primary)')"
+new_primary=$(root_eval 'print(db.hello().primary)')
+echo "old primary $node is now $state, new primary $new_primary"
 
 python3 - "$LOGS/$run.json" "$ISOLATE_AT" "$HEAL_AT" <<'PY'
 import json, sys
@@ -66,11 +67,23 @@ PY
 
 uuid=$(root_eval "const info = db.getSiblingDB('cap_lab_$run').getCollectionInfos({name: 'orders'})[0]; print(info ? info.info.uuid.toUUID().toHexString() : '')")
 
-./venv/bin/python scripts/cap/cap_lab.py check --log "$LOGS/$run.json" 2>&1 | grep -v RuntimeWarning
+./venv/bin/python scripts/cap/cap_lab.py check --log "$LOGS/$run.json" --summary "$LOGS/$run.check.json" 2>&1 | grep -v RuntimeWarning
 
-echo "rollback files on $node:"
-docker exec "$container" sh -c "
+rolled_back=$(docker exec "$container" sh -c "
   dir=/data/db/rollback/$uuid
-  [ -n '$uuid' ] && [ -d \"\$dir\" ] || { echo '  none'; exit 0; }
-  for f in \"\$dir\"/*.bson; do echo \"  \$(basename \"\$f\"): \$(bsondump --quiet \"\$f\" | wc -l) orders\"; done
-  rm -rf \"\$dir\""
+  [ -n '$uuid' ] && [ -d \"\$dir\" ] || { echo 0; exit 0; }
+  cat \"\$dir\"/*.bson | bsondump --quiet | wc -l
+  rm -rf \"\$dir\"")
+echo "rollback files on $node: $rolled_back orders"
+
+if [ -n "${CAP_SUMMARY:-}" ]; then
+  python3 - "$CAP_SUMMARY" "$LOGS/$run.json" "$LOGS/$run.check.json" "$W" "$node" "$new_primary" "$rolled_back" "$ISOLATE_AT" "$HEAL_AT" <<'PY'
+import json, sys
+out, log, check, w, node, new_primary, rolled_back, isolate_at, heal_at = sys.argv[1:]
+json.dump({
+    "w": w, "node": node, "new_primary": new_primary.split(".")[0],
+    "log": log, "check": json.load(open(check)), "rolled_back": int(rolled_back),
+    "isolate_at": float(isolate_at), "heal_at": float(heal_at),
+}, open(out, "w"))
+PY
+fi

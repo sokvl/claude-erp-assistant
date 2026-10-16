@@ -44,10 +44,21 @@ def check(args):
     for entry in run["log"]:
         if entry["outcome"] != "acked":
             errors[entry["outcome"]] = errors.get(entry["outcome"], 0) + 1
-    print(f"w={run['w']}  attempted {len(run['log'])}  acknowledged {len(acked)}  failed {errors or 0}")
-    print(f"acknowledged but lost: {len(acked - stored)}  {sorted(acked - stored)[:20]}")
-    print(f"stored although reported failed: {len(stored - acked)}")
-    print(f"slowest write: {max(entry['ms'] for entry in run['log'])} ms")
+    summary = {
+        "w": run["w"],
+        "attempted": len(run["log"]),
+        "acked": len(acked),
+        "failed": errors,
+        "lost": len(acked - stored),
+        "stored_failed": len(stored - acked),
+        "slowest_ms": max(entry["ms"] for entry in run["log"]),
+    }
+    print(f"w={run['w']}  attempted {summary['attempted']}  acknowledged {summary['acked']}  failed {errors or 0}")
+    print(f"acknowledged but lost: {summary['lost']}  {sorted(acked - stored)[:20]}")
+    print(f"stored although reported failed: {summary['stored_failed']}")
+    print(f"slowest write: {summary['slowest_ms']} ms")
+    if args.summary:
+        Path(args.summary).write_text(json.dumps(summary))
     client.drop_database(db_name)
     print(f"dropped {db_name}")
 
@@ -61,12 +72,19 @@ def diverge(args):
         level: db.get_collection(COLLECTION, read_concern=ReadConcern(level)) for level in ("local", "majority")
     }
     started = time.monotonic()
+    rows = []
 
     def report(label):
         hello = client.admin.command("hello")
-        role = "PRIMARY" if hello["isWritablePrimary"] else "SECONDARY"
-        counts = "  ".join(f"{level} sees {reader.count_documents({})}" for level, reader in readers.items())
-        print(f"{time.monotonic() - started:5.1f}s  {label:<34} node is {role:<9}  {counts}", flush=True)
+        row = {
+            "at": round(time.monotonic() - started, 1),
+            "label": label,
+            "role": "PRIMARY" if hello["isWritablePrimary"] else "SECONDARY",
+            **{level: reader.count_documents({}) for level, reader in readers.items()},
+        }
+        rows.append(row)
+        counts = f"local sees {row['local']}  majority sees {row['majority']}"
+        print(f"{row['at']:5.1f}s  {label:<34} node is {row['role']:<9}  {counts}", flush=True)
 
     durable.insert_many([{"_id": seq} for seq in range(args.seed)])
     report(f"{args.seed} orders written with majority")
@@ -84,6 +102,8 @@ def diverge(args):
     report(f"+{acked} acknowledged with w=1")
     time.sleep(max(0.0, args.recheck_at - (time.monotonic() - started)))
     report("later, same node")
+    if args.summary:
+        Path(args.summary).write_text(json.dumps(rows))
 
 
 def cleanup(args):
@@ -110,6 +130,7 @@ def main():
 
     checker = commands.add_parser("check", help="count acknowledged orders that survived, then drop the run's database")
     checker.add_argument("--log", required=True)
+    checker.add_argument("--summary", help="also write the counts to this JSON file")
     checker.set_defaults(handler=check)
 
     diverger = commands.add_parser("diverge", help="on a node about to be cut off, compare local and majority reads")
@@ -118,6 +139,7 @@ def main():
     diverger.add_argument("--diverge-at", type=float, required=True)
     diverger.add_argument("--write-seconds", type=float, default=3)
     diverger.add_argument("--recheck-at", type=float, required=True)
+    diverger.add_argument("--summary", help="also write the readings to this JSON file")
     diverger.set_defaults(handler=diverge)
 
     cleaner = commands.add_parser("cleanup", help=f"drop every {DB_PREFIX}* database left by an interrupted run")
