@@ -52,6 +52,40 @@ def check(args):
     print(f"dropped {db_name}")
 
 
+def diverge(args):
+    client = MongoClient(args.uri, serverSelectionTimeoutMS=2000, retryWrites=False)
+    db = client[DB_PREFIX + args.run]
+    durable = db.get_collection(COLLECTION, write_concern=WriteConcern(w="majority", wtimeout=2000))
+    local_only = db.get_collection(COLLECTION, write_concern=WriteConcern(w=1))
+    readers = {
+        level: db.get_collection(COLLECTION, read_concern=ReadConcern(level)) for level in ("local", "majority")
+    }
+    started = time.monotonic()
+
+    def report(label):
+        hello = client.admin.command("hello")
+        role = "PRIMARY" if hello["isWritablePrimary"] else "SECONDARY"
+        counts = "  ".join(f"{level} sees {reader.count_documents({})}" for level, reader in readers.items())
+        print(f"{time.monotonic() - started:5.1f}s  {label:<34} node is {role:<9}  {counts}", flush=True)
+
+    durable.insert_many([{"_id": seq} for seq in range(args.seed)])
+    report(f"{args.seed} orders written with majority")
+    time.sleep(max(0.0, args.diverge_at - (time.monotonic() - started)))
+    acked, seq = 0, args.seed
+    until = time.monotonic() + args.write_seconds
+    while time.monotonic() < until:
+        try:
+            local_only.insert_one({"_id": seq})
+            acked += 1
+        except PyMongoError:
+            pass
+        seq += 1
+        time.sleep(0.05)
+    report(f"+{acked} acknowledged with w=1")
+    time.sleep(max(0.0, args.recheck_at - (time.monotonic() - started)))
+    report("later, same node")
+
+
 def cleanup(args):
     client = MongoClient(args.uri)
     leftovers = [name for name in client.list_database_names() if name.startswith(DB_PREFIX)]
@@ -77,6 +111,14 @@ def main():
     checker = commands.add_parser("check", help="count acknowledged orders that survived, then drop the run's database")
     checker.add_argument("--log", required=True)
     checker.set_defaults(handler=check)
+
+    diverger = commands.add_parser("diverge", help="on a node about to be cut off, compare local and majority reads")
+    diverger.add_argument("--run", required=True)
+    diverger.add_argument("--seed", type=int, default=10)
+    diverger.add_argument("--diverge-at", type=float, required=True)
+    diverger.add_argument("--write-seconds", type=float, default=3)
+    diverger.add_argument("--recheck-at", type=float, required=True)
+    diverger.set_defaults(handler=diverge)
 
     cleaner = commands.add_parser("cleanup", help=f"drop every {DB_PREFIX}* database left by an interrupted run")
     cleaner.set_defaults(handler=cleanup)
