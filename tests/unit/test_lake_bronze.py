@@ -11,6 +11,7 @@ from lake.bronze import (
     Window,
     build_filter,
     build_window,
+    count_window,
     extract_batches,
     find_unknown_fields,
     load_bronze,
@@ -57,6 +58,10 @@ class Invoices:
     def find(self, criteria, sort, batch_size):
         self.calls.append((criteria, sort, batch_size))
         return iter(self.documents)
+
+    def count_documents(self, criteria):
+        self.calls.append((criteria,))
+        return len(self.documents)
 
 
 @pytest.fixture
@@ -206,3 +211,18 @@ def test_load_bronze_reports_unknown_fields_across_batches(lake):
 
     # Assert
     assert load.unknown_fields == ["priority", "region"]
+
+
+# The asset check compares the partition with this count, so both must read the same snapshot:
+# same window, same secondary, same majority read concern.
+def test_count_window_counts_with_the_same_read_options_as_the_extract():
+    # Arrange
+    invoices = Invoices([_invoice("S1"), _invoice("S2")])
+
+    # Act
+    count = count_window(invoices, Window(since=None, until=END))
+
+    # Assert
+    assert count == 2
+    assert invoices.options == {"read_preference": ReadPreference.SECONDARY_PREFERRED, "read_concern": ReadConcern("majority")}
+    assert invoices.calls == [({"updatedAt": {"$lt": END}},)]

@@ -93,6 +93,14 @@ class Lake:
             return pa.Table.from_batches(batches)
         return schema.empty_table() if schema is not None else pa.table({})
 
+    def read_part_schemas(self, layer: Layer, dataset: str, partitions: Iterable[str] | None = None) -> list[pa.Schema]:
+        fs, _ = self._resolve(layer)
+        schemas = []
+        for file in self.list_part_files(layer, dataset, partitions):
+            with fs.open(file, "rb") as stream:
+                schemas.append(pq.read_schema(stream))
+        return schemas
+
     def list_partitions(self, layer: Layer, dataset: str) -> list[str]:
         fs, root = self._resolve(layer)
         base = f"{root}/{dataset}"

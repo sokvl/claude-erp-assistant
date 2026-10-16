@@ -178,3 +178,14 @@ def test_read_pointer_returns_what_was_written_or_none(lake, written, expected):
 
     # Assert
     assert pointer == expected
+
+
+def test_read_part_schemas_returns_one_schema_per_part_file(lake):
+    # Arrange
+    lake.replace_partition(Layer.BRONZE, "invoices", "p1", [_table(0, 2), _table(2, 2)])
+
+    # Act
+    schemas = lake.read_part_schemas(Layer.BRONZE, "invoices")
+
+    # Assert
+    assert [schema.equals(SCHEMA) for schema in schemas] == [True, True]

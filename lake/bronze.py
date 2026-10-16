@@ -88,12 +88,19 @@ def name_partition(start: datetime) -> str:
     return f"changed_at={start:%Y-%m-%d-%H}"
 
 
-def extract_batches(collection: Any, window: Window, batch_size: int = DEFAULT_BATCH_ROWS) -> Iterator[tuple[dict, ...]]:
-    source = collection.with_options(
+def read_source(collection: Any) -> Any:
+    return collection.with_options(
         read_preference=ReadPreference.SECONDARY_PREFERRED, read_concern=ReadConcern("majority")
     )
-    cursor = source.find(build_filter(window), sort=[("updatedAt", 1), ("_id", 1)], batch_size=batch_size)
+
+
+def extract_batches(collection: Any, window: Window, batch_size: int = DEFAULT_BATCH_ROWS) -> Iterator[tuple[dict, ...]]:
+    cursor = read_source(collection).find(build_filter(window), sort=[("updatedAt", 1), ("_id", 1)], batch_size=batch_size)
     return batched(cursor, batch_size)
+
+
+def count_window(collection: Any, window: Window) -> int:
+    return read_source(collection).count_documents(build_filter(window))
 
 
 def to_table(documents: Iterable[Mapping[str, Any]], extracted_at: datetime) -> pa.Table:
