@@ -53,6 +53,21 @@ services:
         aliases:
           - mongo3.localhost
 
+  garage:
+    image: dxflrs/garage:v2.1.0
+    container_name: invoices_garage
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?set GARAGE_RPC_SECRET in .env}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?set GARAGE_ADMIN_TOKEN in .env}
+    ports:
+      - "127.0.0.1:3900:3900"
+      - "127.0.0.1:3903:3903"
+    volumes:
+      - ./deploy/garage/garage.toml:/etc/garage.toml:ro,z
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+
   vault:
     image: hashicorp/vault:1.20
     container_name: invoices_vault
@@ -87,3 +102,5 @@ volumes:
   mongo_data:
   mongo2_data:
   mongo3_data:
+  garage_meta:
+  garage_data:
