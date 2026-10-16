@@ -19,7 +19,7 @@ vault secrets enable transit >/dev/null 2>&1 || true
 vault write -f transit/keys/app-jwt type=ed25519 >/dev/null
 
 printf '%s' "$ANTHROPIC_API_KEY" | vault kv put secret/invoices-app \
-  ANTHROPIC_API_KEY=- MONGO_URI="mongodb://invoices_app:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}@mongo:27017/invoices_db?authSource=admin" >/dev/null
+  ANTHROPIC_API_KEY=- MONGO_URI="mongodb://invoices_app:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}@mongo1.localhost:27017,mongo2.localhost:27018,mongo3.localhost:27019/invoices_db?authSource=admin&replicaSet=rs0" >/dev/null
 
 vault policy write invoices-app - >/dev/null <<'POLICY'
 path "secret/data/invoices-app" { capabilities = ["read"] }

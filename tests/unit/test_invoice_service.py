@@ -202,6 +202,31 @@ def test_close_invoice_closes_only_an_open_invoice(stored, expected):
     assert document["isOpen"] is False
 
 
+def test_close_invoice_stamps_updated_at_with_the_close_time():
+    # Arrange
+    collection = InvoiceStore({"_id": "1930438491", "isOpen": True})
+
+    # Act
+    close_invoice(collection, "1930438491", "wire received")
+
+    # Assert
+    document = collection.documents["1930438491"]
+    assert document["updatedAt"] == document["closedAt"]
+
+
+# The lake reads "what changed since last time" from updatedAt, so a refused close must not
+# look like a change.
+def test_close_invoice_already_closed_leaves_updated_at_alone():
+    # Arrange
+    collection = InvoiceStore({"_id": "1930438491", "isOpen": False, "updatedAt": "earlier"})
+
+    # Act
+    close_invoice(collection, "1930438491", "wire received")
+
+    # Assert
+    assert collection.documents["1930438491"]["updatedAt"] == "earlier"
+
+
 def test_close_invoice_unknown_id_reports_nothing_closed():
     # Arrange
     collection = InvoiceStore()

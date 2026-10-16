@@ -11,6 +11,8 @@ invoices - equality, then sort, then range; `_id` is the pagination tiebreaker:
   status counts. Overdue adds `dueInDate` as a residual filter; overdue is a
   subset of open, so a fourth key would widen the index for little gain.
 - (totalOpen, _id): largest/smallest-first lists and amount ranges.
+- (updatedAt, _id): the data lake's incremental extract, a time window read in
+  order with `_id` as the resume point. Every write to an invoice sets updatedAt.
 - customer.number and customer.nameLower: the two branches of the customer
   `$or`; nameLower is matched with a left-anchored prefix so both are bounded.
 No currency index: two values, and analytics already splits per currency. No
@@ -49,9 +51,9 @@ is the TTL, so a lockout lifts itself once the window passes.
 
 users - keyed by the username, so the _id index is the unique one it needs.
 
-products - 52 documents fit in one storage page, where a collection scan beats
-any index lookup, and every spec field lives on the 11 GPUs that `category`
-already isolates. (category, listPrice) is kept for the primary shape: a
+products - under a hundred documents fit in a few storage pages, where a collection scan beats
+any index lookup, and every spec field a search filters or sorts on lives on
+the 11 GPUs that `category` already isolates. (category, listPrice) is kept for the primary shape: a
 category with a budget or a price sort. Add more when explain shows a hot shape
 examining far more documents than it returns.
 """
@@ -62,6 +64,7 @@ INVOICE_INDEXES = [
     IndexModel([("dates.postingDate", ASCENDING), ("_id", ASCENDING)]),
     IndexModel([("isOpen", ASCENDING), ("dates.postingDate", ASCENDING), ("_id", ASCENDING)]),
     IndexModel([("amounts.totalOpen", ASCENDING), ("_id", ASCENDING)]),
+    IndexModel([("updatedAt", ASCENDING), ("_id", ASCENDING)]),
     IndexModel([("customer.number", ASCENDING)]),
     IndexModel([("customer.nameLower", ASCENDING)]),
 ]

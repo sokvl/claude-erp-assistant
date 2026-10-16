@@ -1,9 +1,11 @@
 services:
-  mongo:
+  mongo1:
     image: mongo:7
     container_name: invoices_mongo
     restart: unless-stopped
-    command: ["--auth", "--wiredTigerCollectionBlockCompressor=zstd"]
+    stop_grace_period: 60s
+    entrypoint: ["bash", "-c", "install -m 400 -o 999 -g 999 /run/mongo-keyfile /tmp/keyfile && exec docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["mongod", "--auth", "--replSet", "rs0", "--keyFile", "/tmp/keyfile", "--bind_ip_all", "--port", "27017", "--wiredTigerCollectionBlockCompressor=zstd"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env}
@@ -11,6 +13,60 @@ services:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
+      - ./deploy/mongo/keyfile:/run/mongo-keyfile:ro,z
+    networks:
+      default:
+        aliases:
+          - mongo1.localhost
+
+  mongo2:
+    image: mongo:7
+    container_name: invoices_mongo2
+    restart: unless-stopped
+    stop_grace_period: 60s
+    entrypoint: ["bash", "-c", "install -m 400 -o 999 -g 999 /run/mongo-keyfile /tmp/keyfile && exec docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["mongod", "--auth", "--replSet", "rs0", "--keyFile", "/tmp/keyfile", "--bind_ip_all", "--port", "27018", "--wiredTigerCollectionBlockCompressor=zstd"]
+    ports:
+      - "127.0.0.1:27018:27018"
+    volumes:
+      - mongo2_data:/data/db
+      - ./deploy/mongo/keyfile:/run/mongo-keyfile:ro,z
+    networks:
+      default:
+        aliases:
+          - mongo2.localhost
+
+  mongo3:
+    image: mongo:7
+    container_name: invoices_mongo3
+    restart: unless-stopped
+    stop_grace_period: 60s
+    entrypoint: ["bash", "-c", "install -m 400 -o 999 -g 999 /run/mongo-keyfile /tmp/keyfile && exec docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["mongod", "--auth", "--replSet", "rs0", "--keyFile", "/tmp/keyfile", "--bind_ip_all", "--port", "27019", "--wiredTigerCollectionBlockCompressor=zstd"]
+    ports:
+      - "127.0.0.1:27019:27019"
+    volumes:
+      - mongo3_data:/data/db
+      - ./deploy/mongo/keyfile:/run/mongo-keyfile:ro,z
+    networks:
+      default:
+        aliases:
+          - mongo3.localhost
+
+  garage:
+    image: dxflrs/garage:v2.1.0
+    container_name: invoices_garage
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?set GARAGE_RPC_SECRET in .env}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?set GARAGE_ADMIN_TOKEN in .env}
+    ports:
+      - "127.0.0.1:3900:3900"
+      - "127.0.0.1:3903:3903"
+    volumes:
+      - ./deploy/garage/garage.toml:/etc/garage.toml:ro,z
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
 
   vault:
     image: hashicorp/vault:1.20
@@ -27,7 +83,7 @@ services:
     build: .
     env_file: .env
     environment:
-      MONGO_URI: mongodb://invoices_app:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}@mongo:27017/invoices_db?authSource=admin
+      MONGO_URI: mongodb://invoices_app:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}@mongo1.localhost:27017,mongo2.localhost:27018,mongo3.localhost:27019/invoices_db?authSource=admin&replicaSet=rs0
       VAULT_ADDR: http://vault:8200
       VAULT_ROLE_ID_FILE: /run/secrets/vault_role_id
       VAULT_SECRET_ID_FILE: /run/secrets/vault_secret_id
@@ -35,10 +91,16 @@ services:
       - ./deploy/vault/role_id:/run/secrets/vault_role_id:ro,z
       - ./deploy/vault/secret_id:/run/secrets/vault_secret_id:ro,z
     depends_on:
-      - mongo
+      - mongo1
+      - mongo2
+      - mongo3
       - vault
     ports:
       - "8000:8000"
 
 volumes:
   mongo_data:
+  mongo2_data:
+  mongo3_data:
+  garage_meta:
+  garage_data:

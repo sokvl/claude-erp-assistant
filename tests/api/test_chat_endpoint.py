@@ -24,6 +24,9 @@ class UsageCollection:
     def __init__(self):
         self.documents = []
 
+    def with_options(self, write_concern):
+        return self
+
     def insert_one(self, document):
         self.documents.append(document)
 

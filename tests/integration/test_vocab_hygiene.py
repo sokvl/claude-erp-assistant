@@ -14,8 +14,8 @@ ENUMS = {
 }
 
 
-# test_seed_catalog checks the code; this checks the database the app actually
-# serves. A stored value outside the enums is a product no search can reach.
+# This checks the database the app actually serves, not the seed script. A stored
+# value outside the enums is a product no search can reach.
 @pytest.mark.parametrize("param", list(ENUMS), ids=list(ENUMS))
 def test_live_catalog_values_are_all_searchable_enum_values(mongo_client, param):
     # Arrange

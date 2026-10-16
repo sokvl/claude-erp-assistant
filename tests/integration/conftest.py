@@ -1,19 +1,19 @@
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 import pytest
 from pymongo import MongoClient
 from pymongo.errors import OperationFailure, PyMongoError
+from pymongo.uri_parser import parse_uri
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "seed"))
 
 from indexes import PRODUCT_INDEXES, sync_indexes  # noqa: E402
 
 URI = os.environ.get("MONGO_TEST_URI", "mongodb://localhost:27017")
-ADDRESS = f"{urlsplit(URI).hostname}:{urlsplit(URI).port or 27017}"
+ADDRESS = ",".join(f"{host}:{port}" for host, port in parse_uri(URI)["nodelist"])
 
 
 def _gpu(sku, name, brand, price, vram, fp16, pooling, arch, memory, use_cases, **extra):

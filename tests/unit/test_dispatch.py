@@ -264,7 +264,7 @@ def test_run_tool_get_product_facets_returns_sorted_vocabularies(db):
         ("search_products", {"page_size": 26}, "page_size: Input should be less than or equal to 25"),
         ("search_products", {"min_vram_gb": 80, "max_vram_gb": 8}, "min_vram_gb (80) must not exceed max_vram_gb (8)"),
         ("search_products", {"in_stock": True}, "in_stock: Extra inputs are not permitted"),
-        ("search_products", {"brand": "Nvidea"}, "brand: Input should be 'AMD', 'ASRock'"),
+        ("search_products", {"brand": "Nvidea"}, "brand: Input should be 'AMD', 'APC'"),
         ("search_products", {"use_case": ["mining"]}, "use_case.0: Input should be 'fine-tuning'"),
         ("list_invoices", {"page": 0}, "page: Input should be greater than or equal to 1"),
         ("list_invoices", {"page_size": 26}, "page_size: Input should be less than or equal to 25"),
