@@ -9,7 +9,9 @@ from lake.bronze import BRONZE_SCHEMA, DATASET, BronzeLoad, build_window, count_
 from lake.settings import Layer, Role, load_settings
 from lake.storage import Lake
 
-hourly = dg.HourlyPartitionsDefinition(start_date=os.environ.get("LAKE_START", "2026-10-16-00:00"), timezone="UTC")
+FIRST_PARTITION = "2026-10-16-00:00"
+
+hourly = dg.HourlyPartitionsDefinition(start_date=FIRST_PARTITION, timezone="UTC")
 
 MATCHES_MONGO = "matches_mongo_count"
 SCHEMA_IS_STABLE = "matches_bronze_schema"
