@@ -8,9 +8,11 @@ on:
   workflow_dispatch:
 
 # Only superseded pull-request runs are cancelled; a push to main or dev publishes an
-# image, and cancelling it mid-build left that commit without one.
+# image, and cancelling it mid-build left that commit without one. Pull requests group by
+# their head branch: a PR run queued after the merge gets github.ref = the base branch and,
+# sharing a group with the push, cancelled the push to main.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
