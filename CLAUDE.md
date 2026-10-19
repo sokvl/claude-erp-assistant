@@ -19,6 +19,7 @@ python seed/load_to_mongo.py                  # invoices from seed/dataset.csv +
 python seed/generate_invoice_items.py [--products-only]   # catalog; without the flag also rewrites invoices.lines
 python seed/fabricate_orders.py [--count --from --to --purge]   # ~1M synthetic invoices, source: "synthetic"
 python seed/backfill_updated_at.py            # one-time: updatedAt on invoices that predate it
+python seed/backfill_invoice_events.py [--apply]   # one-time: event log for closes made before it; dry run without --apply
 python evals/run.py [--level functional|e2e|all] [--case ID]   # live model eval, costs tokens
 ./venv/bin/python scripts/cap/run_all.py      # CAP lab: partitions the replica set, prints tables (~100 s)
 ```
@@ -68,6 +69,9 @@ invoices/
   query.py       PURE builders: build_invoice_filter, build_list_query (find kwargs), build_analytics_pipeline
   service.py     list_invoices / analyze_invoices / close_invoice: the controller the API and the analyst call
   pending_actions.py  a close the analyst requested and a manager approves or rejects (TTL, decided once)
+  closing.py     decide_close: preview the request, check the payment date, then one transaction
+                 for the decision, the close, the outcome and the event
+  events.py      PURE: the append-only invoice_events log (actor user|system), history reads
 charts/
   enums.py       ChartType (line/bar/stacked), ChartMetric (+ METRIC_FIELDS: metric -> analytics row key)
   schemas.py     ChartParams(InvoiceAnalyticsParams): chart_type, metric, rejects unplottable combinations
@@ -85,13 +89,15 @@ assistant/
   usage.py       token/cost rollup -> chat_usage collection (PRICE table keyed by model id)
 utils/           dates.py (today in the business timezone), mongo.py (range_filter)
 routers/         auth.py (/auth/login, /refresh, /logout, /me), products.py (+ /facets), invoices.py
-                 (+ /analytics), chat.py (SSE), charts.py, pending_actions.py (/{id}/approve, /reject)
+                 (+ /analytics), chat.py (SSE), charts.py, pending_actions.py (/{id}/approve, /reject),
+                 audit.py (/audit/invoices/{id}/events, admin only)
 ```
 
 Outside `src/app`: `tests/{unit,api,integration}`, `evals/` (cases + graders comparing the
 model's tool calls and answers with gold queries), `seed/` (dataset and loaders; `products.py`
 holds the catalog and `USE_CASE_TAGS`, `indexes.py` the complete index set), `deploy/` (bootstrap
-scripts and configs for Mongo, Vault, Garage), `scripts/cap/` (the CAP lab, dev tooling). The
+scripts and configs for Mongo, Vault, Garage), `scripts/cap/` (the CAP lab, dev tooling), `lake/`
+(the data lake: storage, bronze, silver, Dagster definitions). The
 Docker image copies only `requirements.txt` and `src/`, so none of these ship.
 
 ## Design decisions that matter
@@ -149,19 +155,25 @@ Docker image copies only `requirements.txt` and `src/`, so none of these ship.
   `ChartParams` rejects combinations the rows cannot produce so the model gets a correctable
   `is_error`. `GET /charts/{id}/image` needs the manager role like the rest, so the page fetches
   it with the access token and renders a blob URL rather than a plain `<img src>`.
-- **Closing an invoice needs a human.** The analyst's `close_invoice` tool only stores a pending
-  action (TTL `PENDING_ACTION_TTL_MINUTES`) and the chat emits `confirmation_required`; the
-  manager who asked approves or rejects it through `/pending-actions/{id}/approve|reject`, which
-  decides it exactly once (filter on `requestedBy`, `status: pending` and unexpired, 409
-  otherwise) and only then calls
-  `close_invoice`. `close_invoice` filters on `isOpen: true`, so a second approval or a paid
-  invoice changes nothing, and sets `updatedAt` together with `closedAt`.
+- **Closing an invoice needs a human.** In a real ERP most invoices close themselves when a bank
+  statement payment matches; a manual close is the exception path, so a person approves it. The
+  analyst's `close_invoice` tool takes a required, nullable `paid_on` (only a suggestion), stores a
+  pending action (TTL `PENDING_ACTION_TTL_MINUTES`) and a `close_requested` event, and the chat
+  emits `confirmation_required`. The card shows a date field (min posting date, max today, empty =
+  write-off); the manager who asked approves or rejects through `/pending-actions/{id}/approve|reject`.
+  `decide_close` previews the request (409 if not decidable), checks the date against the posting
+  date and today in the business timezone (422, the request stays pending), then runs one
+  transaction: decide the request, `close_invoice` (`isOpen`, `closedAt`, `updatedAt`,
+  `dates.clearDate`, filtered on `isOpen: true`), record the outcome and write a `closed` or
+  `close_rejected` event. **The invoice holds state, the event holds circumstances**: who, why,
+  the suggested and approved dates and the conversation live only in `invoice_events`, which is
+  append-only, never expires, and is read by admins (`/audit`), not by the analyst or the lake.
 - **Auth.** Passwords are argon2id; access tokens are short EdDSA JWTs (algorithm pinned on
   verify); refresh tokens rotate, live in an HttpOnly, Secure, SameSite=Strict cookie on `/auth`,
   are stored only as sha256, and a replayed one revokes its whole `familyId`. Scripts use
   per-account API keys (`X-API-Key`, stored as sha256, act as their owner). Roles: `consultant`
   (catalog, advisor) ⊂ `manager` (also invoices, analytics, charts, pending actions, analyst);
-  `admin` is a separate branch that grants neither, and has no routes yet. Charts, pending actions
+  `admin` is a separate branch that grants neither and reads the audit log. Charts, pending actions
   and conversations are scoped to their owner. The model never learns who is asking.
 - **Two assistants, routed explicitly.** `ChatRequest.assistant` (default `advisor`) picks a frozen
   `Profile` whose `role` the caller must hold (`chat_principal`); each assistant has its own
@@ -181,9 +193,12 @@ Docker image copies only `requirements.txt` and `src/`, so none of these ship.
   asserts its index, a key count bounded by the page, and no index intersection. Invoice lists are
   `find` + `count_documents`, not `$facet`. Line items are embedded as `invoices.lines` (≤ 5), so
   there is no `invoice_items` collection. Collections the app writes: `invoices` (closes only),
-  `pending_actions`, `charts`, `conversations`, `chat_usage`, `users`, `refresh_tokens`,
-  `login_attempts`, `api_keys`; the ones that expire have TTL indexes on `expiresAt`, which is
-  what prunes them. The customer filter is `customer.number` or a left-anchored prefix on
+  `pending_actions`, `invoice_events`, `charts`, `conversations`, `chat_usage`, `users`,
+  `refresh_tokens`, `login_attempts`, `api_keys`; the ones that expire have TTL indexes on
+  `expiresAt`, which is what prunes them. Writes that must land together go through
+  `get_transaction_runner` (`with_transaction`, so a transient error retries the whole callback:
+  keep side effects such as e-mail outside it). The unique `(actionId, type)` index on
+  `invoice_events` is partial on `actionId` being a string, because system events store `null`. The customer filter is `customer.number` or a left-anchored prefix on
   `customer.nameLower`: an unanchored or `/i` regex can't be index-bounded. No sparse indexes on
   fields stored as explicit `null`. Long field names stay (block compression is `zstd`).
   `seed/load_to_mongo.py` still `$set`s `isOpen` from the CSV, so rerunning it reopens invoices
@@ -197,8 +212,9 @@ Docker image copies only `requirements.txt` and `src/`, so none of these ship.
   never see a rolled-back write (the lake's bronze extract) reads with `majority`. Measured by the
   CAP lab: a cut-off primary keeps acknowledging `w: 1` writes for ~10 s and loses them on
   rollback (198 per run), `majority` loses none, and a set-wide client is without writes for ~10 s
-  before it moves to the new primary on its own. CI runs a standalone mongod; nothing in the tests
-  depends on the replica set.
+  before it moves to the new primary on its own. Transactions exist only on a replica set, so CI
+  starts `mongo:7 --replSet rs0` with `rs.initiate()` (a service container takes no arguments) and
+  the transaction tests fail rather than skip when `REQUIRE_MONGO` is set.
 - **Data lake storage.** Garage v2 (MinIO no longer publishes a public image) serves S3 on
   `127.0.0.1:3900`. Garage grants per bucket, not per prefix, so each layer is a bucket:
   `lake-bronze`, `lake-silver`, `lake-gold`. `lake-writer` reads and writes all three;
@@ -251,7 +267,8 @@ failure.
   mongomock). Fake databases are plain dicts accessed as `db[name]`, so production code reaches
   collections with `db[name]` (and `.with_options(...)`), never `db.get_collection(...)`.
 - Change `app.dependency_overrides` only inside `yield` fixtures, so a failing assert can't leak
-  overrides into later tests. API tests override `get_database` and `current_principal`.
+  overrides into later tests. API tests override `get_database` and `current_principal`, and
+  routes that write in a transaction also `get_transaction_runner` (`lambda callback: callback(None)`).
 - Integration tests create throwaway `test_catalog_<hex>` / `test_invoices_<hex>` databases and
   drop them afterwards; they never write to `invoices_db` (only `test_vocab_hygiene` reads it).
   The CAP lab writes only to `cap_lab_<run>` databases and removes them and its rollback files.
