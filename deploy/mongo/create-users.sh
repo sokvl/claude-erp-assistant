@@ -36,9 +36,21 @@ function upsert(user, pwd, roles) {
   print(`${action} ${user}`);
 }
 
+function upsertRole(role, privileges) {
+  const action = admin.getRole(role) ? "updated" : "created";
+  if (action === "updated") {
+    admin.updateRole(role, { privileges, roles: [] });
+  } else {
+    admin.createRole({ role, privileges, roles: [] });
+  }
+  print(`${action} role ${role}`);
+}
+
+upsertRole("lakeInvoiceReader", [{ resource: { db: "invoices_db", collection: "invoices" }, actions: ["find"] }]);
+
 upsert("invoices_app", env.MONGO_APP_PASSWORD, [{ role: "readWrite", db: "invoices_db" }]);
 upsert("invoices_test", env.MONGO_TEST_PASSWORD, ["readWriteAnyDatabase", "dbAdminAnyDatabase"]);
-upsert("lake_reader", env.MONGO_LAKE_PASSWORD, [{ role: "read", db: "invoices_db" }]);
+upsert("lake_reader", env.MONGO_LAKE_PASSWORD, [{ role: "lakeInvoiceReader", db: "admin" }]);
 JS
 
 docker exec \
