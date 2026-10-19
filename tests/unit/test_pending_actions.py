@@ -1,9 +1,10 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from app.invoices.pending_actions import (
     decide_pending_action,
+    find_decidable_action,
     record_outcome,
     save_pending_action,
 )
@@ -38,6 +39,7 @@ class Collection:
         return dict(document)
 
     def update_one(self, criteria, update, **kwargs):
+        self.kwargs.append(kwargs)
         document = self.find_one(criteria)
         if document is not None:
             document.update(update["$set"])
@@ -193,3 +195,55 @@ def test_decide_pending_action_times_out_with_the_command_spelling():
 
     # Assert
     assert collection.kwargs[0]["maxTimeMS"] == QUERY_TIMEOUT_MS
+
+
+# The payment date is validated before anything is written, so the request must be readable
+# without consuming it: a rejected date leaves it pending for a second try.
+@pytest.mark.parametrize(
+    ("stored", "decided_by", "found"),
+    [
+        (_pending(), "anna", True),
+        (_pending(), "piotr", False),
+        (_pending(status="approved"), "anna", False),
+        (_pending(expiresAt=datetime.now(UTC) - timedelta(seconds=1)), "anna", False),
+    ],
+    ids=["pending", "another_users_request", "already_decided", "expired"],
+)
+def test_find_decidable_action_peeks_without_deciding(stored, decided_by, found):
+    # Arrange
+    collection = Collection([stored])
+
+    # Act
+    action = find_decidable_action(collection, "action-1", decided_by)
+
+    # Assert
+    assert (action is not None, collection.documents[0]["status"]) == (found, stored["status"])
+
+
+@pytest.mark.parametrize(
+    ("paid_on", "stored"),
+    [(date(2026, 10, 3), datetime(2026, 10, 3, tzinfo=UTC)), (None, None)],
+    ids=["payment_received", "written_off"],
+)
+def test_decide_pending_action_records_the_payment_date_the_human_approved(paid_on, stored):
+    # Arrange
+    collection = Collection([_pending()])
+
+    # Act
+    action = decide_pending_action(collection, "action-1", "anna", True, None, paid_on)
+
+    # Assert
+    assert action["paidOn"] == stored
+
+
+def test_decide_pending_action_and_record_outcome_write_in_the_given_session():
+    # Arrange
+    collection = Collection([_pending()])
+    session = object()
+
+    # Act
+    decide_pending_action(collection, "action-1", "anna", True, None, None, session)
+    record_outcome(collection, "action-1", True, session)
+
+    # Assert
+    assert [kwargs.get("session") for kwargs in collection.kwargs if "session" in kwargs] == [session, session]

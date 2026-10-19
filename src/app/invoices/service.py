@@ -1,6 +1,7 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
+from app.invoices.events import to_midnight
 from app.invoices.pending_actions import save_pending_action
 from app.invoices.query import (
     INVOICE_PROJECTION,
@@ -76,13 +77,29 @@ def request_close(
     }
 
 
-def close_invoice(collection: Any, invoice_id: str, reason: str) -> bool:
+def close_invoice(collection: Any, invoice_id: str, paid_on: date | None, session: Any = None) -> bool:
     now = datetime.now(UTC)
     result = collection.update_one(
         {"_id": invoice_id, "isOpen": True},
-        {"$set": {"isOpen": False, "closedAt": now, "closedReason": reason, "updatedAt": now}},
+        {"$set": {"isOpen": False, "closedAt": now, "updatedAt": now, "dates.clearDate": to_midnight(paid_on)}},
+        session=session,
     )
     return result.modified_count > 0
+
+
+def read_posting_date(collection: Any, invoice_id: str) -> date | None:
+    invoice = collection.find_one({"_id": invoice_id}, {"_id": 0, "dates.postingDate": 1}, max_time_ms=QUERY_TIMEOUT_MS)
+    return invoice["dates"]["postingDate"].date() if invoice else None
+
+
+def check_paid_on(paid_on: date | None, posting_date: date | None, today: date) -> str | None:
+    if paid_on is None:
+        return None
+    if paid_on > today:
+        return f"The payment date {paid_on} is in the future"
+    if posting_date is not None and paid_on < posting_date:
+        return f"The payment date {paid_on} is before the invoice was posted on {posting_date}"
+    return None
 
 
 def _coverage(collection: Any) -> dict[str, str | None]:
