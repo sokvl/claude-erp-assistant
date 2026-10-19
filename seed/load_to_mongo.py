@@ -26,6 +26,7 @@ from indexes import (
     API_KEY_INDEXES,
     CHART_INDEXES,
     CONVERSATION_INDEXES,
+    INVOICE_EVENT_INDEXES,
     INVOICE_INDEXES,
     LOGIN_ATTEMPT_INDEXES,
     PENDING_ACTION_INDEXES,
@@ -114,6 +115,7 @@ def main():
     sync_indexes(database["login_attempts"], LOGIN_ATTEMPT_INDEXES)
     sync_indexes(database["api_keys"], API_KEY_INDEXES)
     sync_indexes(database["conversations"], CONVERSATION_INDEXES)
+    sync_indexes(database["invoice_events"], INVOICE_EVENT_INDEXES)
 
     start = datetime.now()
     loaded_at = datetime.now(UTC)

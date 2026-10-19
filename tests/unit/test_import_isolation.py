@@ -24,6 +24,7 @@ PURE_MODULES = [
     "app.auth.passwords",
     "app.auth.signer",
     "app.auth.tokens",
+    "app.invoices.events",
 ]
 
 
