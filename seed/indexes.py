@@ -51,6 +51,14 @@ is the TTL, so a lockout lifts itself once the window passes.
 
 users - keyed by the username, so the _id index is the unique one it needs.
 
+invoice_events - the append-only audit log of closes, read only by admins and never
+pruned, so there is no TTL:
+- (invoiceId, at, _id): one invoice's history in order, `_id` breaking ties.
+- (actionId, type), unique: one close request can produce one `closed` event, never two.
+  It is partial on `actionId` being a string, because system events (a bank statement
+  import) have no request and store `actionId: null`; a plain unique index would let
+  only one of them exist, since every null counts as the same value.
+
 products - under a hundred documents fit in a few storage pages, where a collection scan beats
 any index lookup, and every spec field a search filters or sorts on lives on
 the 11 GPUs that `category` already isolates. (category, listPrice) is kept for the primary shape: a
@@ -90,6 +98,15 @@ REFRESH_TOKEN_INDEXES = [
 API_KEY_INDEXES = [
     IndexModel([("expiresAt", ASCENDING)], expireAfterSeconds=0),
     IndexModel([("username", ASCENDING), ("prefix", ASCENDING)]),
+]
+
+INVOICE_EVENT_INDEXES = [
+    IndexModel([("invoiceId", ASCENDING), ("at", ASCENDING), ("_id", ASCENDING)]),
+    IndexModel(
+        [("actionId", ASCENDING), ("type", ASCENDING)],
+        unique=True,
+        partialFilterExpression={"actionId": {"$type": "string"}},
+    ),
 ]
 
 LOGIN_ATTEMPT_INDEXES = [

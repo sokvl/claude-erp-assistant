@@ -21,6 +21,7 @@ from app.catalog.service import PRODUCT_COLLECTION, search_catalog
 from app.charts.schemas import ChartParams
 from app.charts.service import chart_analytics
 from app.charts.storage import CHART_COLLECTION
+from app.invoices.events import INVOICE_EVENTS_COLLECTION
 from app.invoices.pending_actions import PENDING_ACTIONS_COLLECTION, PendingAction
 from app.invoices.schemas import InvoiceAnalyticsParams
 from app.invoices.service import analyze_invoices, list_invoices, request_close
@@ -98,8 +99,10 @@ def _dispatch(
             return request_close(
                 db["invoices"],
                 db[PENDING_ACTIONS_COLLECTION],
+                db[INVOICE_EVENTS_COLLECTION],
                 params.invoice_id,
                 params.reason,
+                params.paid_on,
                 conversation_id,
                 username,
             )

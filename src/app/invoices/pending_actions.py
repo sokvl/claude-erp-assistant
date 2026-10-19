@@ -1,10 +1,11 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from pymongo import ReturnDocument
 
+from app.invoices.events import to_midnight
 from app.limits import PENDING_ACTION_TTL_MINUTES, QUERY_TIMEOUT_MS
 
 PENDING_ACTIONS_COLLECTION = "pending_actions"
@@ -26,6 +27,7 @@ def save_pending_action(
     invoice_id: str,
     reason: str,
     consequence: dict[str, Any],
+    suggested_paid_on: date | None = None,
 ) -> str:
     created_at = datetime.now(UTC)
     document = {
@@ -34,6 +36,7 @@ def save_pending_action(
         "invoiceId": invoice_id,
         "reason": reason,
         "consequence": consequence,
+        "suggestedPaidOn": to_midnight(suggested_paid_on),
         "status": "pending",
         "conversationId": conversation_id,
         "requestedBy": requested_by,
@@ -47,28 +50,40 @@ def save_pending_action(
     return document["_id"]
 
 
+def build_decidable_filter(action_id: str, decided_by: str, now: datetime) -> dict[str, Any]:
+    return {"_id": action_id, "requestedBy": decided_by, "status": "pending", "expiresAt": {"$gt": now}}
+
+
+def find_decidable_action(collection: Any, action_id: str, decided_by: str) -> dict[str, Any] | None:
+    return collection.find_one(build_decidable_filter(action_id, decided_by, datetime.now(UTC)), max_time_ms=QUERY_TIMEOUT_MS)
+
+
 def decide_pending_action(
     collection: Any,
     action_id: str,
     decided_by: str,
     approve: bool,
     decided_reason: str | None,
+    paid_on: date | None = None,
+    session: Any = None,
 ) -> dict[str, Any] | None:
     now = datetime.now(UTC)
     return collection.find_one_and_update(
-        {"_id": action_id, "requestedBy": decided_by, "status": "pending", "expiresAt": {"$gt": now}},
+        build_decidable_filter(action_id, decided_by, now),
         {
             "$set": {
                 "status": "approved" if approve else "rejected",
                 "decidedAt": now,
                 "decidedBy": decided_by,
                 "decidedReason": decided_reason,
+                "paidOn": to_midnight(paid_on),
             }
         },
         return_document=ReturnDocument.AFTER,
         maxTimeMS=QUERY_TIMEOUT_MS,
+        session=session,
     )
 
 
-def record_outcome(collection: Any, action_id: str, invoice_closed: bool) -> None:
-    collection.update_one({"_id": action_id}, {"$set": {"invoiceClosed": invoice_closed}})
+def record_outcome(collection: Any, action_id: str, invoice_closed: bool, session: Any = None) -> None:
+    collection.update_one({"_id": action_id}, {"$set": {"invoiceClosed": invoice_closed}}, session=session)

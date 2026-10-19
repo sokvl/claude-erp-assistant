@@ -18,9 +18,10 @@ ROUTES = [
     ("GET", "/charts/chart-1/image", None, Role.MANAGER),
     ("POST", "/pending-actions/action-1/approve", None, Role.MANAGER),
     ("POST", "/pending-actions/action-1/reject", None, Role.MANAGER),
+    ("GET", "/audit/invoices/S000001349/events", None, Role.ADMIN),
 ]
 ROUTE_IDS = ["products", "facets", "chat_advisor", "chat_analyst", "invoices", "invoice_analytics",
-             "charts", "chart_image", "approve", "reject"]
+             "charts", "chart_image", "approve", "reject", "audit_invoice_events"]
 
 
 @pytest.fixture

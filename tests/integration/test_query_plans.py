@@ -2,11 +2,13 @@ from datetime import date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from indexes import CHART_INDEXES, INVOICE_INDEXES, sync_indexes
+from indexes import CHART_INDEXES, INVOICE_EVENT_INDEXES, INVOICE_INDEXES, sync_indexes
+from pymongo.errors import DuplicateKeyError
 
 from app.catalog.enums import SortField, SortOrder
 from app.catalog.query import build_product_filter, build_search_pipeline
 from app.charts.storage import METADATA_PROJECTION
+from app.invoices.events import HISTORY_SORT, Actor, ActorType, EventType, build_event, build_history_filter
 from app.invoices.query import build_analytics_pipeline, build_invoice_filter, build_list_query
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceFilter, InvoiceListParams
 from app.limits import CHART_TTL_DAYS, MAX_RECENT_CHARTS
@@ -330,3 +332,77 @@ def test_charts_expire_on_their_stored_expiry(chart_db):
     # Assert
     [ttl] = [index for index in indexes.values() if "expireAfterSeconds" in index]
     assert (ttl["key"], ttl["expireAfterSeconds"]) == ([("expiresAt", 1)], 0)
+
+
+def _event(i):
+    actor = Actor(ActorType.USER, "anna") if i % 2 else Actor(ActorType.SYSTEM, "bank_statement")
+    action_id = f"action-{i}" if i % 2 else None
+    return build_event(f"INV{i % 50:04d}", EventType.CLOSED, actor, datetime(2020, 1, 1) + timedelta(hours=i), action_id=action_id)
+
+
+@pytest.fixture
+def events_db(mongo_client):
+    # Arrange: a throwaway database, never the demo data in invoices_db
+    db_name = f"test_events_{uuid4().hex[:8]}"
+    database = mongo_client[db_name]
+    database["invoice_events"].insert_many([_event(i) for i in range(500)])
+    sync_indexes(database["invoice_events"], INVOICE_EVENT_INDEXES)
+
+    yield database
+
+    # Annihilate
+    mongo_client.drop_database(db_name)
+
+
+# An admin opening one invoice's history reads only that invoice's keys, already in time order.
+def test_invoice_history_is_served_by_the_invoice_index_in_order(events_db):
+    # Arrange
+    command = {"find": "invoice_events", "filter": build_history_filter("INV0007"), "sort": dict(HISTORY_SORT)}
+    expected = events_db["invoice_events"].count_documents(build_history_filter("INV0007"))
+
+    # Act
+    explain = _explain(events_db, command)
+
+    # Assert
+    stages = _winning_stages(explain)
+    keys, docs = _examined(explain)
+    assert (
+        "invoiceId_1_at_1__id_1" in {name for _, name in stages},
+        "SORT" in {stage for stage, _ in stages},
+        keys <= expected,
+        docs,
+    ) == (True, False, True, expected), stages
+
+
+# System events have no request and store actionId null; the partial unique index must let any
+# number of them exist while still refusing a second `closed` event for the same request.
+def test_one_request_cannot_close_twice_but_system_events_never_collide(events_db):
+    # Arrange
+    events = events_db["invoice_events"]
+    system = Actor(ActorType.SYSTEM, "bank_statement")
+
+    # Act
+    events.insert_many([build_event("INV9998", EventType.CLOSED, system, datetime(2020, 2, 1)) for _ in range(2)])
+
+    # Assert
+    with pytest.raises(DuplicateKeyError):
+        events.insert_one(build_event("INV0001", EventType.CLOSED, Actor(ActorType.USER, "anna"), datetime(2020, 2, 1), action_id="action-1"))
+
+
+# Looking an invoice up by its number reads one key and one document, whatever else is filtered.
+@pytest.mark.parametrize(
+    "params",
+    [{"invoice_id": "INV0007"}, {"invoice_id": "INV0007", "status": "open"}],
+    ids=["number_only", "number_and_status"],
+)
+def test_invoice_number_lookup_reads_one_key(invoice_db, params):
+    # Arrange
+    command = _list(**params)
+
+    # Act
+    explain = _explain(invoice_db, command)
+
+    # Assert
+    keys, docs = _examined(explain)
+    stages = {stage for stage, _ in _winning_stages(explain)}
+    assert (keys <= 1, docs <= 1, "COLLSCAN" in stages) == (True, True, False), stages

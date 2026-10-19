@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -45,6 +46,7 @@ class CloseInvoiceInput(BaseModel):
 
     invoice_id: str = Field(max_length=MAX_TEXT_LENGTH)
     reason: str = Field(max_length=MAX_CLOSE_REASON_LENGTH)
+    paid_on: date | None
 
 
 SEARCH_PRODUCTS_DESCRIPTION = """
@@ -77,7 +79,7 @@ Do not call it before a search: search_products already lists every allowed valu
 
 LIST_INVOICES_DESCRIPTION = """Find individual accounts-receivable invoices. Returns {page, pageSize, total, items}; total counts every invoice matching the filters, and each item has invoiceId, customer (number and name), currency, amounts.totalOpen (the invoice amount), isOpen, and posting, due and clear dates.
 
-Use this to show specific invoices: a customer's open invoices, the largest invoices of a period, the newest invoices, or the invoices behind a figure from analyze_invoices. All filters are optional and combine with AND. To count matching invoices, read total.
+Use this to show specific invoices: one invoice by its number (invoice_id), a customer's open invoices, the largest invoices of a period, the newest invoices, or the invoices behind a figure from analyze_invoices. All filters are optional and combine with AND. To count matching invoices, read total.
 
 Do not:
 - Page through invoices to add up, average or rank them; use analyze_invoices for any total, average, ranking or trend.
@@ -120,11 +122,11 @@ Do not:
 - Claim a chart when chartId is null; that means no invoices matched, so answer in text and say so.
 - Describe the picture, its colours or its axes, or treat it as a source of figures."""
 
-CLOSE_INVOICE_DESCRIPTION = """Ask a human to close an open invoice - for a wire received off-system, a manual reconciliation, or a written-off balance. This does not close it. Returns {status, pendingActionId, invoiceId, consequence}; status is "awaiting_approval", and the employee approves or rejects the request with buttons shown under your answer. consequence has currentAmountOpen, currency, customerNumber and customerName.
+CLOSE_INVOICE_DESCRIPTION = """Ask a human to close an open invoice - for a wire received off-system, a manual reconciliation, or a written-off balance. This does not close it. Returns {status, pendingActionId, invoiceId, consequence}; status is "awaiting_approval", and the employee approves or rejects the request on a card shown under your answer, where they also confirm or correct the payment date. consequence has currentAmountOpen, currency, customerNumber, customerName, postingDate and suggestedPaidOn.
 
-Use it only when the employee explicitly asks to close, write off or manually settle a specific invoice. Check with list_invoices first that the invoice is open.
+Use it only when the employee explicitly asks to close, write off or manually settle a specific invoice. Check with list_invoices first, by invoice_id, that the invoice is open.
 
-After calling, state the invoice, the amount and currency from consequence, and the reason you submitted, and say it closes only once the employee approves it. To learn later whether an invoice closed, call list_invoices: closedAt and closedReason are set once it has.
+After calling, state the invoice, the amount and currency from consequence, and the reason you submitted, and say it closes only once the employee approves it. To learn later whether an invoice closed, call list_invoices: isOpen is false and closedAt is set once it has, and clearDate holds the payment date if one was given.
 
 Do not:
 - Say an invoice is closed on the basis of this tool's result.
@@ -246,6 +248,13 @@ PRODUCT_FACETS_TOOL: dict[str, Any] = {
 
 def _invoice_filter_properties() -> dict[str, Any]:
     return {
+        "invoice_id": {
+            "type": "string",
+            "description": (
+                f"One invoice by its number, exactly as the employee or a result gives it, at most {MAX_TEXT_LENGTH} "
+                "characters. Set it whenever the employee names an invoice number; other filters are then not needed."
+            ),
+        },
         "posted_from": {
             "type": "string",
             "format": "date",
@@ -375,6 +384,14 @@ def _close_invoice_properties() -> dict[str, Any]:
                 "Shown to the employee who approves it."
             ),
         },
+        "paid_on": {
+            "type": ["string", "null"],
+            "description": (
+                "The day the money arrived, as YYYY-MM-DD, only when the employee stated it; it cannot be in the "
+                "future or before the invoice was posted. null for a write-off or when the employee did not say. "
+                "Never guess it: the employee confirms or corrects it on the card."
+            ),
+        },
     }
 
 
@@ -385,7 +402,7 @@ CLOSE_INVOICE_TOOL: dict[str, Any] = {
     "input_schema": {
         "type": "object",
         "properties": _close_invoice_properties(),
-        "required": ["invoice_id", "reason"],
+        "required": ["invoice_id", "reason", "paid_on"],
         "additionalProperties": False,
     },
 }

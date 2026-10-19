@@ -152,6 +152,10 @@
     border: 1px solid var(--border);
   }
   .confirm-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .paid-on { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .paid-on input { width: auto; }
+  .paid-on-hint { margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .confirm-error { margin-top: 8px; font-size: 13px; color: var(--error); }
   .note { align-self: flex-start; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--muted); }
   .note.tool { color: var(--tool); }
   .note.error { color: var(--error); font-weight: 500; }
@@ -202,7 +206,7 @@
   <div id="app" class="app" hidden>
     <header>
       <strong>Store Assistant</strong>
-      <select id="assistant" aria-label="Assistant">
+      <select id="assistant" aria-label="Assistant" autocomplete="off">
         <option value="advisor">Product advisor</option>
         <option value="analyst">Invoice analyst</option>
       </select>
@@ -211,7 +215,7 @@
       <button id="logout" type="button">Log out</button>
     </header>
     <div id="log"></div>
-    <form id="form">
+    <form id="form" autocomplete="off">
       <textarea id="input" placeholder="Type the customer's question. Enter to send, Shift+Enter for a new line."></textarea>
       <button id="send" class="primary" type="submit">Send</button>
     </form>
@@ -239,6 +243,8 @@
   const whoEl = document.getElementById("who");
   const CHAT_ROLES = ["consultant", "manager"];
   let conversationId = null;
+  let generation = 0;
+  let activeChat = null;
   let accessToken = null;
   let refreshing = null;
 
@@ -366,6 +372,10 @@
   }
 
   function startConversation(note) {
+    generation += 1;
+    activeChat?.abort();
+    activeChat = null;
+    send.disabled = false;
     conversationId = null;
     stopSuggestions();
     chartUrls.splice(0).forEach(URL.revokeObjectURL);
@@ -409,6 +419,9 @@
     el.className = "msg assistant confirm";
     el.innerHTML = `
       <div>Close invoice <strong></strong>? <span class="amount"></span> open for <span class="who"></span>.</div>
+      <label class="paid-on">Payment received on <input type="date" class="paid-on-date"></label>
+      <div class="paid-on-hint">Leave the date empty to close without a payment, as a write-off.</div>
+      <div class="confirm-error" hidden></div>
       <div class="confirm-actions">
         <button type="button" class="primary approve">Approve</button>
         <button type="button" class="reject">Reject</button>
@@ -417,40 +430,61 @@
     el.querySelector(".amount").textContent =
       `${consequence.currency} ${consequence.currentAmountOpen.toLocaleString()}`;
     el.querySelector(".who").textContent = consequence.customerName;
+    const dateField = el.querySelector(".paid-on-date");
+    dateField.min = consequence.postingDate ?? "";
+    dateField.max = localToday();
+    dateField.value = consequence.suggestedPaidOn ?? "";
     log.appendChild(el);
     log.scrollTop = log.scrollHeight;
-    el.querySelector(".approve").addEventListener("click", () => decide(actionId, invoiceId, "approve", el));
-    el.querySelector(".reject").addEventListener("click", () => decide(actionId, invoiceId, "reject", el));
+    el.querySelector(".approve").addEventListener("click", () => decide(actionId, invoiceId, "approve", el, dateField.value || null));
+    el.querySelector(".reject").addEventListener("click", () => decide(actionId, invoiceId, "reject", el, null));
   }
 
-  function describeDecision(invoiceId, body) {
+  function localToday() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  }
+
+  function describeDecision(invoiceId, body, paidOn) {
     if (body.status === "rejected") return `Close of invoice ${invoiceId} rejected.`;
-    if (body.invoiceClosed) return `Invoice ${invoiceId} closed.`;
-    return `Invoice ${invoiceId} was already closed.`;
+    if (!body.invoiceClosed) return `Invoice ${invoiceId} was already closed.`;
+    return paidOn
+      ? `Invoice ${invoiceId} closed, payment received on ${paidOn}.`
+      : `Invoice ${invoiceId} closed without a payment date (write-off).`;
   }
 
-  async function decide(actionId, invoiceId, verb, el) {
-    const buttons = el.querySelectorAll("button");
-    buttons.forEach((b) => (b.disabled = true));
+  function describeProblem(detail) {
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) return detail.map((item) => item.msg).join("; ");
+    return "The request was refused.";
+  }
+
+  async function decide(actionId, invoiceId, verb, el, paidOn) {
+    const controls = el.querySelectorAll("button, input");
+    const problem = el.querySelector(".confirm-error");
+    controls.forEach((c) => (c.disabled = true));
+    problem.hidden = true;
     try {
       const response = await authFetch(`/pending-actions/${actionId}/${verb}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(verb === "approve" ? { paid_on: paidOn } : {}),
       });
       const body = await response.json().catch(() => ({}));
       if (response.ok) {
         el.querySelector(".confirm-actions").remove();
-        addNote(describeDecision(invoiceId, body));
+        addNote(describeDecision(invoiceId, body, paidOn));
       } else if (response.status === 409) {
         el.querySelector(".confirm-actions").remove();
         addNote("This request expired or was already decided.", "error");
       } else {
-        buttons.forEach((b) => (b.disabled = false));
-        addNote(`HTTP ${response.status}: ${body.detail ?? "failed"}`, "error");
+        controls.forEach((c) => (c.disabled = false));
+        problem.textContent = response.status === 422 ? describeProblem(body.detail) : `HTTP ${response.status}: ${describeProblem(body.detail)}`;
+        problem.hidden = false;
       }
     } catch (err) {
-      buttons.forEach((b) => (b.disabled = false));
+      controls.forEach((c) => (c.disabled = false));
       addNote(`Request failed: ${err.message}`, "error");
     }
   }
@@ -463,6 +497,10 @@
     send.disabled = true;
     stopSuggestions();
     add("msg user", message);
+    const turn = generation;
+    const controller = new AbortController();
+    activeChat = controller;
+    const current = () => turn === generation;
     let bubble = null;
     let bubbleRaw = "";
     let lastTool = null;
@@ -474,6 +512,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ conversation_id: conversationId, message, assistant: assistantSelect.value }),
+        signal: controller.signal,
       });
       if (!response.ok) {
         stopThinking();
@@ -491,7 +530,7 @@
 
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done || !current()) break;
         buffer += decoder.decode(value, { stream: true });
         let boundary;
         while ((boundary = buffer.indexOf("\n\n")) !== -1) {
@@ -538,13 +577,16 @@
           }
         }
       }
-      if (!finished) addNote("Connection closed before the answer finished.", "error");
+      if (!finished && current()) addNote("Connection closed before the answer finished.", "error");
     } catch (err) {
-      addNote(`Request failed: ${err.message}`, "error");
+      if (current()) addNote(`Request failed: ${err.message}`, "error");
     } finally {
       stopThinking();
-      send.disabled = false;
-      input.focus();
+      if (current()) {
+        activeChat = null;
+        send.disabled = false;
+        input.focus();
+      }
     }
   });
 
@@ -579,7 +621,7 @@
     showLogin();
   });
 
-  refreshSession().then((ok) => { if (!ok) showLogin(); });
+  refreshSession().then((ok) => { if (ok) startConversation("Session restored."); else showLogin(); });
 </script>
 </body>
 </html>

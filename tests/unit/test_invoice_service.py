@@ -1,11 +1,11 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 import pytest
 
 from app.invoices import service
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceListParams
-from app.invoices.service import analyze_invoices, close_invoice, list_invoices
+from app.invoices.service import analyze_invoices, check_paid_on, close_invoice, list_invoices, read_posting_date
 from app.limits import QUERY_TIMEOUT_MS
 
 CURRENCIES = [{"currency": "USD", "groupCount": 1, "rows": [{"invoiceCount": 2, "totalAmount": 30.0}]}]
@@ -170,13 +170,18 @@ def test_invoice_service_as_of_defaults_to_today(monkeypatch, call, params, crit
 class InvoiceStore:
     def __init__(self, *documents):
         self.documents = {document["_id"]: dict(document) for document in documents}
+        self.sessions = []
 
-    def update_one(self, criteria, update):
+    def update_one(self, criteria, update, session=None):
+        self.sessions.append(session)
         document = self.documents.get(criteria["_id"])
         matched = document is not None and document["isOpen"] == criteria["isOpen"]
         if matched:
             document.update(update["$set"])
         return SimpleNamespace(modified_count=int(matched))
+
+    def find_one(self, criteria, projection=None, **options):
+        return self.documents.get(criteria["_id"])
 
 
 # isOpen: True is part of the filter, so approving twice, or approving an invoice that
@@ -184,8 +189,8 @@ class InvoiceStore:
 @pytest.mark.parametrize(
     ("stored", "expected"),
     [
-        ({"_id": "1930438491", "isOpen": True}, (True, "wire received")),
-        ({"_id": "1930438491", "isOpen": False, "closedReason": "paid by card"}, (False, "paid by card")),
+        ({"_id": "1930438491", "isOpen": True}, (True, True)),
+        ({"_id": "1930438491", "isOpen": False, "closedAt": "earlier"}, (False, False)),
     ],
     ids=["open_invoice", "already_closed"],
 )
@@ -194,12 +199,30 @@ def test_close_invoice_closes_only_an_open_invoice(stored, expected):
     collection = InvoiceStore(stored)
 
     # Act
-    closed = close_invoice(collection, "1930438491", "wire received")
+    closed = close_invoice(collection, "1930438491", date(2026, 10, 3))
 
     # Assert
     document = collection.documents["1930438491"]
-    assert (closed, document["closedReason"]) == expected
+    assert (closed, document["closedAt"] != "earlier") == expected
     assert document["isOpen"] is False
+
+
+# The invoice keeps only its state: who closed it and why live in the event log.
+@pytest.mark.parametrize(
+    ("paid_on", "clear_date"),
+    [(date(2026, 10, 3), datetime(2026, 10, 3, tzinfo=UTC)), (None, None)],
+    ids=["payment_received", "written_off"],
+)
+def test_close_invoice_records_the_payment_date_and_no_reason(paid_on, clear_date):
+    # Arrange
+    collection = InvoiceStore({"_id": "1930438491", "isOpen": True})
+
+    # Act
+    close_invoice(collection, "1930438491", paid_on)
+
+    # Assert
+    document = collection.documents["1930438491"]
+    assert (document["dates.clearDate"], "closedReason" in document) == (clear_date, False)
 
 
 def test_close_invoice_stamps_updated_at_with_the_close_time():
@@ -207,7 +230,7 @@ def test_close_invoice_stamps_updated_at_with_the_close_time():
     collection = InvoiceStore({"_id": "1930438491", "isOpen": True})
 
     # Act
-    close_invoice(collection, "1930438491", "wire received")
+    close_invoice(collection, "1930438491", None)
 
     # Assert
     document = collection.documents["1930438491"]
@@ -221,7 +244,7 @@ def test_close_invoice_already_closed_leaves_updated_at_alone():
     collection = InvoiceStore({"_id": "1930438491", "isOpen": False, "updatedAt": "earlier"})
 
     # Act
-    close_invoice(collection, "1930438491", "wire received")
+    close_invoice(collection, "1930438491", None)
 
     # Assert
     assert collection.documents["1930438491"]["updatedAt"] == "earlier"
@@ -232,7 +255,50 @@ def test_close_invoice_unknown_id_reports_nothing_closed():
     collection = InvoiceStore()
 
     # Act
-    closed = close_invoice(collection, "404", "wire received")
+    closed = close_invoice(collection, "404", None)
 
     # Assert
     assert closed is False
+
+
+def test_close_invoice_writes_in_the_given_session():
+    # Arrange
+    collection = InvoiceStore({"_id": "1930438491", "isOpen": True})
+    session = object()
+
+    # Act
+    close_invoice(collection, "1930438491", None, session)
+
+    # Assert
+    assert collection.sessions == [session]
+
+
+@pytest.mark.parametrize(
+    ("paid_on", "posting_date", "expected"),
+    [
+        (None, date(2026, 9, 26), None),
+        (date(2026, 10, 3), date(2026, 9, 26), None),
+        (date(2026, 9, 26), date(2026, 9, 26), None),
+        (date(2026, 10, 19), date(2026, 9, 26), None),
+        (date(2026, 10, 20), date(2026, 9, 26), "The payment date 2026-10-20 is in the future"),
+        (date(2026, 9, 25), date(2026, 9, 26), "The payment date 2026-09-25 is before the invoice was posted on 2026-09-26"),
+        (date(2026, 10, 3), None, None),
+    ],
+    ids=["written_off", "between_posting_and_today", "on_the_posting_day", "today", "tomorrow", "before_posting", "invoice_not_found"],
+)
+def test_check_paid_on_accepts_only_dates_from_posting_to_today(paid_on, posting_date, expected):
+    # Arrange / Act / Assert
+    assert check_paid_on(paid_on, posting_date, date(2026, 10, 19)) == expected
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [({"_id": "S1", "isOpen": True, "dates": {"postingDate": datetime(2026, 9, 26)}}, date(2026, 9, 26)), (None, None)],
+    ids=["found", "missing"],
+)
+def test_read_posting_date_returns_the_day_the_invoice_was_posted(stored, expected):
+    # Arrange
+    collection = InvoiceStore(*([stored] if stored else []))
+
+    # Act / Assert
+    assert read_posting_date(collection, "S1") == expected
