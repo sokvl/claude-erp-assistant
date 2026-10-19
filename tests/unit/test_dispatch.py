@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -57,7 +57,7 @@ class FakeInserts:
     def __init__(self):
         self.documents = []
 
-    def insert_one(self, document):
+    def insert_one(self, document, session=None):
         self.documents.append(document)
 
 
@@ -67,6 +67,7 @@ OPEN_INVOICE = {
     "isOpen": True,
     "amounts": {"totalOpen": 1234.5},
     "customer": {"number": "0200769623", "name": "WAL-MART"},
+    "dates": {"postingDate": datetime(2026, 9, 26)},
 }
 
 
@@ -77,6 +78,7 @@ def db():
         "invoices": FakeInvoices(),
         "charts": FakeInserts(),
         "pending_actions": FakeInserts(),
+        "invoice_events": FakeInserts(),
     }
 
 
@@ -180,7 +182,7 @@ def test_run_tool_close_invoice_open_invoice_records_a_pending_action_and_leaves
     db["invoices"].by_id["1930438491"] = OPEN_INVOICE
 
     # Act
-    output = run_tool(db, "close_invoice", {"invoice_id": "1930438491", "reason": "wire received"}, "conv-1", "anna")
+    output = run_tool(db, "close_invoice", {"invoice_id": "1930438491", "reason": "wire received", "paid_on": None}, "conv-1", "anna")
 
     # Assert
     result = json.loads(output.content)
@@ -192,6 +194,8 @@ def test_run_tool_close_invoice_open_invoice_records_a_pending_action_and_leaves
         "currency": "USD",
         "customerNumber": "0200769623",
         "customerName": "WAL-MART",
+        "postingDate": "2026-09-26",
+        "suggestedPaidOn": None,
     }
     assert (stored["invoiceId"], stored["reason"], stored["conversationId"]) == ("1930438491", "wire received", "conv-1")
     assert stored["requestedBy"] == "anna"
@@ -201,13 +205,20 @@ def test_run_tool_close_invoice_open_invoice_records_a_pending_action_and_leaves
 @pytest.mark.parametrize(
     ("stored", "tool_input", "expected_message"),
     [
-        ({}, {"invoice_id": "404", "reason": "wire"}, "No invoice '404' found"),
-        ({"1930438491": OPEN_INVOICE | {"isOpen": False}}, {"invoice_id": "1930438491", "reason": "wire"},
+        ({}, {"invoice_id": "404", "reason": "wire", "paid_on": None}, "No invoice '404' found"),
+        ({"1930438491": OPEN_INVOICE | {"isOpen": False}}, {"invoice_id": "1930438491", "reason": "wire", "paid_on": None},
          "is not open; nothing to close"),
-        ({}, {"invoice_id": "1930438491"}, "reason: Field required"),
-        ({}, {"invoice_id": "1930438491", "reason": "x" * 201}, "reason: String should have at most 200 characters"),
+        ({}, {"invoice_id": "1930438491", "paid_on": None}, "reason: Field required"),
+        ({}, {"invoice_id": "1930438491", "reason": "x" * 201, "paid_on": None}, "reason: String should have at most 200 characters"),
+        ({}, {"invoice_id": "1930438491", "reason": "wire"}, "paid_on: Field required"),
+        ({}, {"invoice_id": "1930438491", "reason": "wire", "paid_on": "3 October"}, "paid_on: Input should be a valid date"),
+        ({"1930438491": OPEN_INVOICE}, {"invoice_id": "1930438491", "reason": "wire", "paid_on": "2999-01-01"},
+         "is in the future"),
+        ({"1930438491": OPEN_INVOICE}, {"invoice_id": "1930438491", "reason": "wire", "paid_on": "2026-09-25"},
+         "before the invoice was posted on 2026-09-26"),
     ],
-    ids=["unknown_invoice", "already_closed", "missing_reason", "reason_over_cap"],
+    ids=["unknown_invoice", "already_closed", "missing_reason", "reason_over_cap", "missing_paid_on", "paid_on_not_a_date",
+         "paid_on_in_the_future", "paid_on_before_posting"],
 )
 def test_run_tool_close_invoice_invalid_request_raises_tool_input_error_and_stores_nothing(
     db, stored, tool_input, expected_message
@@ -221,7 +232,25 @@ def test_run_tool_close_invoice_invalid_request_raises_tool_input_error_and_stor
 
     # Assert
     assert expected_message in str(raised.value)
-    assert db["pending_actions"].documents == []
+    assert (db["pending_actions"].documents, db["invoice_events"].documents) == ([], [])
+
+
+# The model's date is only a suggestion: it is stored on the request and shown on the card,
+# where the employee confirms or corrects it; the request itself is logged as an event.
+def test_run_tool_close_invoice_suggested_date_is_kept_on_the_request_and_logged(db):
+    # Arrange
+    db["invoices"].by_id["1930438491"] = OPEN_INVOICE
+
+    # Act
+    output = run_tool(db, "close_invoice", {"invoice_id": "1930438491", "reason": "wire received", "paid_on": "2026-10-03"}, "conv-1", "anna")
+
+    # Assert
+    [stored] = db["pending_actions"].documents
+    [event] = db["invoice_events"].documents
+    assert (output.pending_action.consequence["suggestedPaidOn"], stored["suggestedPaidOn"]) == ("2026-10-03", datetime(2026, 10, 3, tzinfo=UTC))
+    assert (event["type"], event["actor"], event["suggestedPaidOn"], event["actionId"], event["paidOn"]) == (
+        "close_requested", {"type": "user", "id": "anna"}, datetime(2026, 10, 3, tzinfo=UTC), stored["_id"], None
+    )
 
 
 @pytest.mark.parametrize(

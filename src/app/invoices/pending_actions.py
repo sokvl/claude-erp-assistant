@@ -27,6 +27,7 @@ def save_pending_action(
     invoice_id: str,
     reason: str,
     consequence: dict[str, Any],
+    suggested_paid_on: date | None = None,
 ) -> str:
     created_at = datetime.now(UTC)
     document = {
@@ -35,6 +36,7 @@ def save_pending_action(
         "invoiceId": invoice_id,
         "reason": reason,
         "consequence": consequence,
+        "suggestedPaidOn": to_midnight(suggested_paid_on),
         "status": "pending",
         "conversationId": conversation_id,
         "requestedBy": requested_by,

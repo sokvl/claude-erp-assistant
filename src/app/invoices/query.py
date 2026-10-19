@@ -20,7 +20,6 @@ INVOICE_PROJECTION = {
     "dates.dueInDate": 1,
     "dates.clearDate": 1,
     "closedAt": 1,
-    "closedReason": 1,
 }
 
 MONEY_FIELDS = ("totalAmount", "averageAmount", "openAmount", "overdueAmount")

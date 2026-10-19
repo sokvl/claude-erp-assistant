@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime
 from typing import Any
 
-from app.invoices.events import to_midnight
+from app.invoices.events import Actor, ActorType, EventType, build_event, record_event, to_midnight
 from app.invoices.pending_actions import save_pending_action
 from app.invoices.query import (
     INVOICE_PROJECTION,
@@ -52,8 +52,10 @@ def analyze_invoices(collection: Any, params: InvoiceAnalyticsParams) -> dict[st
 def request_close(
     invoices: Any,
     pending_actions: Any,
+    events: Any,
     invoice_id: str,
     reason: str,
+    suggested_paid_on: date | None,
     conversation_id: str | None,
     requested_by: str | None,
 ) -> dict[str, Any]:
@@ -62,13 +64,34 @@ def request_close(
         raise ValueError(f"No invoice {invoice_id!r} found")
     if not invoice["isOpen"]:
         raise ValueError(f"Invoice {invoice_id!r} is not open; nothing to close")
+    posting_date = invoice["dates"]["postingDate"].date()
+    problem = check_paid_on(suggested_paid_on, posting_date, today_in_business_timezone())
+    if problem:
+        raise ValueError(problem)
     consequence = {
         "currentAmountOpen": invoice["amounts"]["totalOpen"],
         "currency": invoice["currency"],
         "customerNumber": invoice["customer"]["number"],
         "customerName": invoice["customer"]["name"],
+        "postingDate": posting_date.isoformat(),
+        "suggestedPaidOn": suggested_paid_on.isoformat() if suggested_paid_on else None,
     }
-    action_id = save_pending_action(pending_actions, conversation_id, requested_by, invoice_id, reason, consequence)
+    action_id = save_pending_action(
+        pending_actions, conversation_id, requested_by, invoice_id, reason, consequence, suggested_paid_on
+    )
+    record_event(
+        events,
+        build_event(
+            invoice_id,
+            EventType.CLOSE_REQUESTED,
+            Actor(ActorType.USER, requested_by or "unknown"),
+            datetime.now(UTC),
+            reason=reason,
+            suggested_paid_on=suggested_paid_on,
+            action_id=action_id,
+            conversation_id=conversation_id,
+        ),
+    )
     return {
         "status": "awaiting_approval",
         "pendingActionId": action_id,
