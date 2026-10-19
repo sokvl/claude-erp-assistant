@@ -94,3 +94,9 @@ def test_invoice_filter_parses_iso_date_strings_into_dates():
 
     # Assert
     assert (params.posted_from, params.as_of) == (date(2020, 1, 1), date(2020, 5, 31))
+
+
+def test_invoice_filter_invoice_id_over_the_text_cap_is_rejected():
+    # Arrange / Act / Assert
+    with pytest.raises(ValidationError, match="invoice_id"):
+        InvoiceFilter(invoice_id="S" * (MAX_TEXT_LENGTH + 1))

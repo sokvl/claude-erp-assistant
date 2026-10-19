@@ -387,3 +387,22 @@ def test_one_request_cannot_close_twice_but_system_events_never_collide(events_d
     # Assert
     with pytest.raises(DuplicateKeyError):
         events.insert_one(build_event("INV0001", EventType.CLOSED, Actor(ActorType.USER, "anna"), datetime(2020, 2, 1), action_id="action-1"))
+
+
+# Looking an invoice up by its number reads one key and one document, whatever else is filtered.
+@pytest.mark.parametrize(
+    "params",
+    [{"invoice_id": "INV0007"}, {"invoice_id": "INV0007", "status": "open"}],
+    ids=["number_only", "number_and_status"],
+)
+def test_invoice_number_lookup_reads_one_key(invoice_db, params):
+    # Arrange
+    command = _list(**params)
+
+    # Act
+    explain = _explain(invoice_db, command)
+
+    # Assert
+    keys, docs = _examined(explain)
+    stages = {stage for stage, _ in _winning_stages(explain)}
+    assert (keys <= 1, docs <= 1, "COLLSCAN" in stages) == (True, True, False), stages

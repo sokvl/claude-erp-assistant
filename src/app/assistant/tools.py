@@ -79,7 +79,7 @@ Do not call it before a search: search_products already lists every allowed valu
 
 LIST_INVOICES_DESCRIPTION = """Find individual accounts-receivable invoices. Returns {page, pageSize, total, items}; total counts every invoice matching the filters, and each item has invoiceId, customer (number and name), currency, amounts.totalOpen (the invoice amount), isOpen, and posting, due and clear dates.
 
-Use this to show specific invoices: a customer's open invoices, the largest invoices of a period, the newest invoices, or the invoices behind a figure from analyze_invoices. All filters are optional and combine with AND. To count matching invoices, read total.
+Use this to show specific invoices: one invoice by its number (invoice_id), a customer's open invoices, the largest invoices of a period, the newest invoices, or the invoices behind a figure from analyze_invoices. All filters are optional and combine with AND. To count matching invoices, read total.
 
 Do not:
 - Page through invoices to add up, average or rank them; use analyze_invoices for any total, average, ranking or trend.
@@ -124,7 +124,7 @@ Do not:
 
 CLOSE_INVOICE_DESCRIPTION = """Ask a human to close an open invoice - for a wire received off-system, a manual reconciliation, or a written-off balance. This does not close it. Returns {status, pendingActionId, invoiceId, consequence}; status is "awaiting_approval", and the employee approves or rejects the request on a card shown under your answer, where they also confirm or correct the payment date. consequence has currentAmountOpen, currency, customerNumber, customerName, postingDate and suggestedPaidOn.
 
-Use it only when the employee explicitly asks to close, write off or manually settle a specific invoice. Check with list_invoices first that the invoice is open.
+Use it only when the employee explicitly asks to close, write off or manually settle a specific invoice. Check with list_invoices first, by invoice_id, that the invoice is open.
 
 After calling, state the invoice, the amount and currency from consequence, and the reason you submitted, and say it closes only once the employee approves it. To learn later whether an invoice closed, call list_invoices: isOpen is false and closedAt is set once it has, and clearDate holds the payment date if one was given.
 
@@ -248,6 +248,13 @@ PRODUCT_FACETS_TOOL: dict[str, Any] = {
 
 def _invoice_filter_properties() -> dict[str, Any]:
     return {
+        "invoice_id": {
+            "type": "string",
+            "description": (
+                f"One invoice by its number, exactly as the employee or a result gives it, at most {MAX_TEXT_LENGTH} "
+                "characters. Set it whenever the employee names an invoice number; other filters are then not needed."
+            ),
+        },
         "posted_from": {
             "type": "string",
             "format": "date",

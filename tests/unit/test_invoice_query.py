@@ -65,6 +65,9 @@ END_OF_DAY = (23, 59, 59, 999999)
         # zero is a real bound - a truthiness check would drop it
         ({"min_amount": 0}, {"amounts.totalOpen": {"$gte": 0}}),
         ({"min_amount": 100, "max_amount": 500}, {"amounts.totalOpen": {"$gte": 100, "$lte": 500}}),
+        # _id, not invoiceId: six real invoices have no invoiceId, and _id is always indexed
+        ({"invoice_id": "S000001349"}, {"_id": "S000001349"}),
+        ({"invoice_id": "S000001349", "status": "open"}, {"_id": "S000001349", "isOpen": True}),
         (
             {"posted_from": date(2019, 1, 1), "customer": "WAL-MAR", "currency": "USD", "status": "overdue",
              "max_amount": 1000},
@@ -83,7 +86,7 @@ END_OF_DAY = (23, 59, 59, 999999)
     ],
     ids=["no_filters", "date_range_inclusive", "from_only", "to_only", "to_last_day", "customer_number_or_name",
          "customer_name_prefix_lowercased", "customer_regex_escaped", "customer_empty", "currency", "open", "cleared", "overdue_before_as_of",
-         "min_amount_zero", "amount_range", "all_filters"],
+         "min_amount_zero", "amount_range", "invoice_number", "invoice_number_and_status", "all_filters"],
 )
 def test_build_invoice_filter_builds_expected_criteria(kwargs, expected):
     # Arrange

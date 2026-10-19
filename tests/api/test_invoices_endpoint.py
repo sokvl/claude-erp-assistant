@@ -114,3 +114,12 @@ def test_invoice_endpoints_invalid_query_returns_422_without_querying(client, in
     # Assert
     assert (response.status_code, invoices.aggregate_calls, invoices.find_calls) == (422, [], [])
 
+
+
+def test_list_invoices_by_invoice_number_looks_up_the_id(client, invoices):
+    # Arrange / Act
+    client.get("/invoices?invoice_id=S000001349")
+
+    # Assert
+    [find] = invoices.find_calls
+    assert find["filter"] == {"_id": "S000001349"}

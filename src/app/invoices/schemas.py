@@ -11,6 +11,7 @@ from app.limits import MAX_AMOUNT, MAX_ANALYTICS_ROWS, MAX_PAGE, MAX_PAGE_SIZE, 
 class InvoiceFilter(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    invoice_id: str | None = Field(None, max_length=MAX_TEXT_LENGTH)
     posted_from: date | None = None
     posted_to: date | None = None
     customer: str | None = Field(None, max_length=MAX_TEXT_LENGTH)

@@ -28,6 +28,9 @@ MONEY_FIELDS = ("totalAmount", "averageAmount", "openAmount", "overdueAmount")
 def build_invoice_filter(filters: InvoiceFilter, as_of: date) -> dict[str, Any]:
     criteria: dict[str, Any] = {}
 
+    if filters.invoice_id:
+        criteria["_id"] = filters.invoice_id
+
     posted = range_filter(
         None if filters.posted_from is None else datetime.combine(filters.posted_from, time.min),
         None if filters.posted_to is None else datetime.combine(filters.posted_to, time.max),
