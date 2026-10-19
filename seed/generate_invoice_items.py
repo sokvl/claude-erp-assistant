@@ -19,6 +19,7 @@ import argparse
 import math
 import os
 import random
+from datetime import UTC, datetime
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -135,6 +136,7 @@ def main():
         return
 
     invoices_col = db["invoices"]
+    rewritten_at = datetime.now(UTC)
     ops = []
     matched = 0
     total_lines = 0
@@ -146,7 +148,9 @@ def main():
         reconciled = round(sum(l["lineTotal"] for l in lines), 2)
         max_abs_diff = max(max_abs_diff, abs(reconciled - target))
 
-        ops.append(UpdateOne({"_id": row["invoiceKey"]}, {"$set": {"lines": lines}}))
+        ops.append(
+            UpdateOne({"_id": row["invoiceKey"], "lines": {"$ne": lines}}, {"$set": {"lines": lines, "updatedAt": rewritten_at}})
+        )
         total_lines += len(lines)
 
         if len(ops) >= args.batch_size:
@@ -155,7 +159,7 @@ def main():
     if ops:
         matched += invoices_col.bulk_write(ops, ordered=False).matched_count
 
-    print(f"Embedded {total_lines} line items in {matched} of {len(df)} invoices")
+    print(f"Built {total_lines} line items; rewrote the lines of {matched} of {len(df)} invoices (the rest already had them)")
     print(f"Max |reconciled - target| across all invoices: {max_abs_diff}")
 
 
