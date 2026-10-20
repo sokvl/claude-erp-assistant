@@ -89,17 +89,22 @@
             <span aria-hidden="true">to</span>
             <input type="date" name="posted_to" aria-label="Posted to">
           </div>
-          <details class="more">
-            <summary>More filters</summary>
-            <div class="more-panel">
-              <label>Invoice number <input name="invoice_id"></label>
-              <label>Currency <input name="currency" class="short" placeholder="USD"></label>
-              <label>Open amount from <input type="number" name="min_amount" step="any" class="short"></label>
-              <label>Open amount to <input type="number" name="max_amount" step="any" class="short"></label>
-              <label>Overdue as of <input type="date" name="as_of"></label>
-            </div>
-          </details>
+          <button class="more-toggle" type="button" aria-expanded="false" aria-controls="invoice-more">
+            More filters
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
           <button class="link clear" type="button" hidden>Clear filters</button>
+          <div id="invoice-more" class="more">
+            <div class="more-clip">
+              <div class="more-panel">
+                <label>Invoice number <input name="invoice_id"></label>
+                <label>Currency <input name="currency" class="short" placeholder="USD"></label>
+                <label>Open amount from <input type="number" name="min_amount" step="any" class="short"></label>
+                <label>Open amount to <input type="number" name="max_amount" step="any" class="short"></label>
+                <label>Overdue as of <input type="date" name="as_of"></label>
+              </div>
+            </div>
+          </div>
         </form>
         <p class="problem" role="alert" hidden></p>
         <div class="results">

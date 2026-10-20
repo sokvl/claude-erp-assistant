@@ -13,6 +13,8 @@ const tbody = table.querySelector("tbody");
 const empty = section.querySelector(".empty");
 const pager = section.querySelector(".pager");
 const sortHeaders = section.querySelectorAll("th[data-sort]");
+const moreToggle = form.querySelector(".more-toggle");
+const morePanel = document.getElementById(moreToggle.getAttribute("aria-controls"));
 
 const DEFAULT_SORT = { by: "posting_date", order: "desc" };
 const TYPING_DELAY_MS = 300;
@@ -147,8 +149,14 @@ export function show() {
   if (!loaded) load();
 }
 
+function setMoreOpen(open) {
+  moreToggle.setAttribute("aria-expanded", String(open));
+  morePanel.classList.toggle("open", open);
+}
+
 export function reset() {
   request += 1;
+  setMoreOpen(false);
   clearTimeout(typingTimer);
   loaded = false;
   sort = { ...DEFAULT_SORT };
@@ -168,6 +176,10 @@ section.addEventListener("input", (e) => {
   if (e.target.form !== form) return;
   clearTimeout(typingTimer);
   typingTimer = setTimeout(reload, e.target.type === "date" ? 0 : TYPING_DELAY_MS);
+});
+
+moreToggle.addEventListener("click", () => {
+  setMoreOpen(moreToggle.getAttribute("aria-expanded") !== "true");
 });
 
 statusButtons.forEach((b) => b.addEventListener("click", () => {

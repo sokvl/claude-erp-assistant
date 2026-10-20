@@ -162,7 +162,7 @@ input.short { width: 110px; }
   display: inline-flex; gap: 2px; padding: 3px;
   background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border); border-radius: 10px;
 }
-.segmented button, .chip, button.link, .more summary {
+.segmented button, .chip, button.link, .more-toggle {
   font-size: 13px; font-weight: 500; color: var(--muted); background: none; border-color: transparent;
 }
 .segmented button { padding: 5px 12px; border-radius: 7px; }
@@ -176,20 +176,32 @@ button.link { padding: 5px 6px; color: var(--accent); }
 }
 button.link:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; border-color: transparent; }
 
-.more[open] { flex-basis: 100%; }
-.more summary {
-  display: inline-block; list-style: none; cursor: pointer; padding: 6px 12px;
-  border: 1px solid var(--border); border-radius: 10px; transition: color 150ms ease, border-color 150ms ease;
+.more-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px 6px 12px;
+  border-color: var(--border); border-radius: 10px;
 }
-.more summary::-webkit-details-marker { display: none; }
-.more summary::after { content: "+"; margin-left: 8px; }
-.more[open] summary { color: var(--text); border-color: var(--accent); }
-.more[open] summary::after { content: "−"; }
+.more-toggle svg {
+  width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.more-toggle[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
+.more-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+button.more-toggle:hover:not(:disabled) { color: var(--text); transform: none; box-shadow: none; }
+.more {
+  flex-basis: 100%; display: grid; grid-template-rows: 0fr; margin-top: -10px;
+  opacity: 0; visibility: hidden;
+  transition: grid-template-rows 340ms cubic-bezier(0.4, 0, 0.2, 1), margin-top 340ms cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 300ms ease, visibility 0s linear 340ms;
+}
+.more.open {
+  grid-template-rows: 1fr; margin-top: 0; opacity: 1; visibility: visible;
+  transition: grid-template-rows 280ms cubic-bezier(0.2, 0.8, 0.2, 1), margin-top 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 220ms ease 60ms, visibility 0s;
+}
+.more-clip { min-height: 0; overflow: hidden; }
 .more-panel {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px;
-  margin-top: 10px; padding: 14px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 14px;
   background: rgba(0, 0, 0, 0.18); border: 1px solid var(--border); border-radius: 12px;
-  animation: view-in 160ms ease-out both;
 }
 .more-panel label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
 .more-panel input { width: 100%; }
