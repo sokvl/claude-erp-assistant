@@ -15,10 +15,11 @@ class Target:
     layer: Layer
     dataset: str
     partition: str
+    empty_schema: pa.Schema | None = None
 
 
 def load_partition(
     lake: Lake, target: Target, batches: Iterable[Batch], transform: Callable[[Batch], pa.Table | pa.RecordBatch]
 ) -> int:
     tables = (transform(batch) for batch in batches)
-    return lake.replace_partition(target.layer, target.dataset, target.partition, tables)
+    return lake.replace_partition(target.layer, target.dataset, target.partition, tables, target.empty_schema)

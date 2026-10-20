@@ -5,6 +5,7 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
+from lake.bronze import BRONZE_SCHEMA
 from lake.bronze import DATASET as BRONZE_DATASET
 from lake.bronze import to_table
 from lake.settings import LakeSettings, Layer
@@ -762,3 +763,19 @@ def test_count_flagged_counts_invoices_with_at_least_one_flag():
 
     # Assert
     assert flagged == 2
+
+
+# Empty hours are marked by a schema-only bronze file; merging one changes no month but must
+# still count as processed, or the reconciliation watermark could never pass it.
+def test_merge_silver_empty_bronze_hour_is_processed_without_touching_months(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"))
+    merge_silver(lake)
+    lake.replace_partition(Layer.BRONZE, BRONZE_DATASET, "changed_at=2026-10-16-01", [], empty_schema=BRONZE_SCHEMA)
+
+    # Act
+    run = merge_silver(lake)
+
+    # Assert
+    assert (run.bronze_partitions, run.months, run.customers) == (["changed_at=2026-10-16-01"], [], 1)
+    assert read_processed_partitions(lake) == ["changed_at=2026-10-16-00", "changed_at=2026-10-16-01"]

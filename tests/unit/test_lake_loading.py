@@ -62,3 +62,14 @@ def test_load_partition_no_batches_leaves_no_partition(lake):
 
     # Assert
     assert (rows, lake.list_partitions(TARGET.layer, TARGET.dataset)) == (0, [])
+
+
+def test_load_partition_no_batches_with_an_empty_schema_marks_the_partition(lake):
+    # Arrange
+    target = Target(TARGET.layer, TARGET.dataset, TARGET.partition, empty_schema=pa.schema([("n", pa.int64())]))
+
+    # Act
+    rows = load_partition(lake, target, [], _to_table)
+
+    # Assert
+    assert (rows, lake.list_partitions(target.layer, target.dataset)) == (0, [target.partition])
