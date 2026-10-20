@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Store Assistant</title>
+<link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}">
+</head>
+<body>
+<form id="login" class="login" hidden>
+  <h1>Sign in</h1>
+  <input name="username" placeholder="Username" autocomplete="username" required>
+  <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+  <button class="primary" type="submit">Sign in</button>
+  <p class="error" role="alert"></p>
+</form>
+<div id="app" class="shell" hidden>
+  <div class="titlebar">
+    <button id="menu" class="icon-button" type="button" aria-label="Menu" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <span class="title">Store Assistant</span>
+  </div>
+  <div class="shell-body">
+    <aside id="sidebar" class="sidebar">
+      <nav class="nav" aria-label="Main">
+        <a class="nav-item" href="#/invoices" data-route="invoices">
+          <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Invoices
+        </a>
+        <a class="nav-item" href="#/products" data-route="products">
+          <svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Products
+        </a>
+        <a class="nav-item" href="#/audit" data-route="audit">
+          <svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Audit
+        </a>
+      </nav>
+      <div class="chat-group" data-route="chat">
+        <button id="new-chat" class="nav-item" type="button" data-route="chat">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New chat
+        </button>
+        <section id="history" class="history" aria-label="Chat history"></section>
+      </div>
+      <div class="user-card">
+        <span class="avatar" aria-hidden="true"></span>
+        <span class="user-meta">
+          <span class="user-name"></span>
+          <span class="user-role"></span>
+        </span>
+        <button id="logout" class="icon-button" type="button" aria-label="Log out" title="Log out">
+          <svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4"/></svg>
+        </button>
+      </div>
+    </aside>
+    <div class="backdrop"></div>
+    <main class="content">
+      <section class="view" data-view="chat" hidden>
+        <header>
+          <h1>Assistant</h1>
+          <select id="assistant" aria-label="Assistant" autocomplete="off">
+            <option value="advisor">Product advisor</option>
+            <option value="analyst">Invoice analyst</option>
+          </select>
+        </header>
+        <div id="log"></div>
+        <form id="form" autocomplete="off">
+          <textarea id="input" placeholder="Type the customer's question. Enter to send, Shift+Enter for a new line."></textarea>
+          <button id="send" class="primary" type="submit">Send</button>
+        </form>
+      </section>
+      <section class="view page" data-view="invoices" hidden>
+        <header>
+          <h1>Invoices</h1>
+          <label class="search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+            <input form="invoice-filters" name="customer" type="search" placeholder="Customer name or number" aria-label="Customer">
+          </label>
+        </header>
+        <form id="invoice-filters" class="toolbar" autocomplete="off">
+          <input type="hidden" name="status">
+          <div class="segmented" role="group" aria-label="Status">
+            <button type="button" data-status="" aria-pressed="true">All</button>
+            <button type="button" data-status="open" aria-pressed="false">Open</button>
+            <button type="button" data-status="overdue" aria-pressed="false">Overdue</button>
+            <button type="button" data-status="cleared" aria-pressed="false">Cleared</button>
+          </div>
+          <div class="range" role="group" aria-label="Posting date">
+            <span>Posted</span>
+            <input type="date" name="posted_from" aria-label="Posted from">
+            <span aria-hidden="true">to</span>
+            <input type="date" name="posted_to" aria-label="Posted to">
+          </div>
+          <button class="more-toggle" type="button" aria-expanded="false" aria-controls="invoice-more">
+            More filters
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <button class="link clear" type="button" hidden>Clear filters</button>
+          <div id="invoice-more" class="more">
+            <div class="more-clip">
+              <div class="more-panel">
+                <label>Invoice number <input name="invoice_id"></label>
+                <label>Currency <input name="currency" class="short" placeholder="USD"></label>
+                <label>Open amount from <input type="number" name="min_amount" step="any" class="short"></label>
+                <label>Open amount to <input type="number" name="max_amount" step="any" class="short"></label>
+                <label>Overdue as of <input type="date" name="as_of"></label>
+              </div>
+            </div>
+          </div>
+        </form>
+        <p class="problem" role="alert" hidden></p>
+        <div class="results">
+          <table class="ledger">
+            <thead>
+              <tr>
+                <th>Invoice</th>
+                <th>Customer</th>
+                <th class="hide-sm" data-sort="posting_date"><button type="button" class="sort">Posted</button></th>
+                <th>Due</th>
+                <th class="num" data-sort="amount"><button type="button" class="sort">Open amount</button></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="empty" hidden>
+            <p></p>
+            <button class="link clear" type="button">Clear filters</button>
+          </div>
+        </div>
+        <div class="pager"></div>
+      </section>
+      <section class="view page" data-view="products" hidden>
+        <header>
+          <h1>Products</h1>
+          <label class="sort-select">Sort
+            <select form="product-filters" name="sort">
+              <option value="name:asc">Name, A to Z</option>
+              <option value="price:asc">Price, lowest first</option>
+              <option value="price:desc">Price, highest first</option>
+              <option value="vram:desc" data-gpu>Most VRAM</option>
+              <option value="fp16:desc" data-gpu>Fastest FP16</option>
+              <option value="release_year:desc" data-gpu>Newest</option>
+            </select>
+          </label>
+        </header>
+        <form id="product-filters" class="toolbar stacked" autocomplete="off">
+          <input type="hidden" name="category">
+          <div class="chips categories" role="group" aria-label="Category"></div>
+          <div class="toolbar-row">
+            <label class="inline">Brand <select name="brand"><option value="">Any</option></select></label>
+            <div class="range" role="group" aria-label="Price">
+              <span>Price</span>
+              <input type="number" name="min_price" step="any" class="short" placeholder="Min" aria-label="Minimum price">
+              <span aria-hidden="true">to</span>
+              <input type="number" name="max_price" step="any" class="short" placeholder="Max" aria-label="Maximum price">
+            </div>
+            <button class="link clear" type="button" hidden>Clear filters</button>
+          </div>
+          <div class="toolbar-row gpu-only" hidden>
+            <label class="inline">Architecture <select name="architecture"><option value="">Any</option></select></label>
+            <label class="inline">Memory <select name="memory_type"><option value="">Any</option></select></label>
+            <div class="chips use-cases" role="group" aria-label="Use cases"></div>
+          </div>
+        </form>
+        <p class="problem" role="alert" hidden></p>
+        <div class="results">
+          <p class="count"></p>
+          <ul class="catalog"></ul>
+          <div class="empty" hidden>
+            <p></p>
+            <button class="link clear" type="button">Clear filters</button>
+          </div>
+        </div>
+        <div class="pager"></div>
+      </section>
+      <section class="view page" data-view="audit" hidden>
+        <header><h1>Audit</h1></header>
+        <form id="audit-form" class="filters" autocomplete="off">
+          <label>Invoice id <input name="invoice_id" required></label>
+          <button class="primary" type="submit">Look up</button>
+        </form>
+        <p class="problem" role="alert" hidden></p>
+        <p class="empty" hidden></p>
+        <div class="table-wrap" hidden>
+          <table class="data">
+            <thead><tr><th>At (UTC)</th><th>Event</th><th>Actor</th><th>Paid on</th><th>Suggested</th><th>Reason</th><th>Conversation</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+<script type="module" src="{{ url_for('static', path='js/main.js') }}"></script>
+</body>
+</html>
