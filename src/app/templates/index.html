@@ -27,6 +27,9 @@
       <button id="new-chat" class="nav-item" type="button" data-route="chat">
         <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New chat
       </button>
+      <a class="nav-item" href="#/invoices" data-route="invoices">
+        <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Invoices
+      </a>
       <a class="nav-item" href="#/audit" data-route="audit">
         <svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Audit
       </a>
@@ -52,6 +55,48 @@
         <textarea id="input" placeholder="Type the customer's question. Enter to send, Shift+Enter for a new line."></textarea>
         <button id="send" class="primary" type="submit">Send</button>
       </form>
+    </section>
+    <section class="view page" data-view="invoices" hidden>
+      <header><h1>Invoices</h1></header>
+      <form id="invoice-filters" class="filters" autocomplete="off">
+        <label>Invoice id <input name="invoice_id"></label>
+        <label>Customer <input name="customer" placeholder="Number or name prefix"></label>
+        <label>Currency <input name="currency" class="short" placeholder="USD"></label>
+        <label>Status
+          <select name="status">
+            <option value="">Any</option>
+            <option value="open">Open</option>
+            <option value="overdue">Overdue</option>
+            <option value="cleared">Cleared</option>
+          </select>
+        </label>
+        <label>Posted from <input type="date" name="posted_from"></label>
+        <label>Posted to <input type="date" name="posted_to"></label>
+        <label>Min open amount <input type="number" name="min_amount" step="any" class="short"></label>
+        <label>Max open amount <input type="number" name="max_amount" step="any" class="short"></label>
+        <label>As of <input type="date" name="as_of"></label>
+        <button class="primary" type="submit">Apply</button>
+        <button class="clear" type="button">Clear</button>
+      </form>
+      <p class="problem" role="alert" hidden></p>
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>Invoice</th>
+              <th>Customer</th>
+              <th data-sort="posting_date"><button type="button" class="sort">Posted</button></th>
+              <th>Due</th>
+              <th class="num" data-sort="amount"><button type="button" class="sort">Open amount</button></th>
+              <th>Status</th>
+              <th>Cleared</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" hidden></p>
+      <div class="pager"></div>
     </section>
     <section class="view page" data-view="audit" hidden>
       <header><h1>Audit</h1></header>

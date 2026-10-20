@@ -42,3 +42,7 @@ export function describeProblem(detail) {
   if (Array.isArray(detail)) return detail.map((item) => item.msg).join("; ");
   return "The request was refused.";
 }
+
+export function responseProblem(status, detail) {
+  return status === 422 ? describeProblem(detail) : `HTTP ${status}: ${describeProblem(detail)}`;
+}

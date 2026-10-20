@@ -1,4 +1,5 @@
 import { authFetch, describeProblem } from "./api.js";
+import { localToday } from "./table.js";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -139,12 +140,6 @@ function addConfirmation(actionId, invoiceId, consequence) {
   log.scrollTop = log.scrollHeight;
   el.querySelector(".approve").addEventListener("click", () => decide(actionId, invoiceId, "approve", el, dateField.value || null));
   el.querySelector(".reject").addEventListener("click", () => decide(actionId, invoiceId, "reject", el, null));
-}
-
-function localToday() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 function describeDecision(invoiceId, body, paidOn) {

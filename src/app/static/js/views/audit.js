@@ -1,4 +1,4 @@
-import { authFetch, describeProblem } from "../api.js";
+import { authFetch, responseProblem } from "../api.js";
 import { formatDate, formatDateTime, renderTable } from "../table.js";
 
 const section = document.querySelector('[data-view="audit"]');
@@ -37,7 +37,7 @@ async function load(invoiceId) {
     const response = await authFetch(`/audit/invoices/${encodeURIComponent(invoiceId)}/events`);
     const body = await response.json().catch(() => ({}));
     if (ticket !== request) return;
-    if (!response.ok) showResults({ error: `HTTP ${response.status}: ${describeProblem(body.detail)}` });
+    if (!response.ok) showResults({ error: responseProblem(response.status, body.detail) });
     else if (!body.events.length) showResults({ message: `No events recorded for invoice ${invoiceId}.` });
     else showResults({ events: body.events });
   } catch (err) {
