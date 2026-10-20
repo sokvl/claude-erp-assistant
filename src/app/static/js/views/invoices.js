@@ -1,90 +1,115 @@
 import { authFetch, responseProblem } from "../api.js";
-import { clearPager, formatDate, formatMoney, localToday, renderPager, renderTable } from "../table.js";
+import { clearPager, daysBetween, formatDay, formatMoney, localToday, renderPager, renderTable } from "../table.js";
 
 const section = document.querySelector('[data-view="invoices"]');
 const form = document.getElementById("invoice-filters");
+const statusButtons = form.querySelectorAll("[data-status]");
+const clearButtons = section.querySelectorAll(".clear");
+const toolbarClear = form.querySelector(".clear");
 const problem = section.querySelector(".problem");
+const results = section.querySelector(".results");
+const table = section.querySelector(".ledger");
+const tbody = table.querySelector("tbody");
 const empty = section.querySelector(".empty");
-const tbody = section.querySelector("tbody");
 const pager = section.querySelector(".pager");
 const sortHeaders = section.querySelectorAll("th[data-sort]");
 
 const DEFAULT_SORT = { by: "posting_date", order: "desc" };
+const TYPING_DELAY_MS = 300;
 
 let sort = { ...DEFAULT_SORT };
 let page = 1;
 let loaded = false;
 let request = 0;
+let typingTimer = null;
 
-function statusOf(invoice, asOf) {
-  if (!invoice.isOpen) return "cleared";
-  return formatDate(invoice.dates.dueInDate) < asOf ? "overdue" : "open";
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function twoLines(main, sub, subClass = "sub") {
+  const cell = document.createDocumentFragment();
+  const top = document.createElement("span");
+  top.className = "main";
+  top.textContent = main;
+  const bottom = document.createElement("span");
+  bottom.className = subClass;
+  bottom.textContent = sub;
+  cell.append(top, bottom);
+  return cell;
+}
+
+function dueState(invoice, asOf) {
+  if (!invoice.isOpen) {
+    const cleared = invoice.dates.clearDate;
+    return { kind: "cleared", text: cleared ? `Cleared ${formatDay(cleared)}` : "Cleared" };
+  }
+  const days = daysBetween(asOf, invoice.dates.dueInDate);
+  if (days < 0) return { kind: "overdue", text: `${plural(-days, "day")} overdue` };
+  if (days === 0) return { kind: "open", text: "Due today" };
+  return { kind: "open", text: `Due in ${plural(days, "day")}` };
 }
 
 function columns(asOf) {
   return [
-    { value: (i) => i.invoiceId },
-    {
-      className: "wrap",
-      value: (i) => {
-        const cell = document.createDocumentFragment();
-        const number = document.createElement("span");
-        number.className = "muted";
-        number.textContent = i.customer.number;
-        cell.append(i.customer.name, number);
-        return cell;
-      },
-    },
-    { value: (i) => formatDate(i.dates.postingDate) },
-    { value: (i) => formatDate(i.dates.dueInDate) },
-    { className: "num", value: (i) => formatMoney(i.amounts.totalOpen, i.currency) },
+    { className: "id", value: (i) => i.invoiceId },
+    { className: "wrap", value: (i) => twoLines(i.customer.name, i.customer.number) },
+    { className: "hide-sm", value: (i) => formatDay(i.dates.postingDate) },
     {
       value: (i) => {
-        const badge = document.createElement("span");
-        const status = statusOf(i, asOf);
-        badge.className = `status ${status}`;
-        badge.textContent = status;
-        return badge;
+        const state = dueState(i, asOf);
+        return twoLines(formatDay(i.dates.dueInDate), state.text, `state ${state.kind}`);
       },
     },
-    { value: (i) => formatDate(i.dates.clearDate) },
+    {
+      className: "num",
+      value: (i) => {
+        const amount = document.createElement("span");
+        amount.className = i.amounts.totalOpen ? "amount" : "amount settled";
+        amount.textContent = formatMoney(i.amounts.totalOpen, i.currency);
+        return amount;
+      },
+    },
   ];
 }
 
-function query() {
+function filters() {
   const params = new URLSearchParams();
   for (const [name, value] of new FormData(form)) {
     const trimmed = value.trim();
     if (trimmed) params.set(name, name === "currency" ? trimmed.toUpperCase() : trimmed);
   }
-  params.set("sort_by", sort.by);
-  params.set("sort_order", sort.order);
-  params.set("page", page);
   return params;
 }
 
-function renderSort() {
+function renderControls(params) {
+  const status = params.get("status") ?? "";
+  statusButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.status === status)));
+  toolbarClear.hidden = [...params.keys()].length === 0;
   sortHeaders.forEach((th) => {
     const active = th.dataset.sort === sort.by;
     th.setAttribute("aria-sort", active ? (sort.order === "asc" ? "ascending" : "descending") : "none");
-    th.querySelector("button").dataset.arrow = active ? (sort.order === "asc" ? " ↑" : " ↓") : "";
+    th.querySelector("button").dataset.arrow = active ? (sort.order === "asc" ? "↑" : "↓") : "";
   });
 }
 
 function showMessage({ error = "", message = "" }) {
   problem.textContent = error;
   problem.hidden = !error;
-  empty.textContent = message;
+  empty.querySelector("p").textContent = message;
   empty.hidden = !message;
 }
 
 async function load() {
   loaded = true;
+  clearTimeout(typingTimer);
   const ticket = ++request;
-  const params = query();
+  const params = filters();
   const asOf = params.get("as_of") || localToday();
-  renderSort();
-  showMessage({ message: "Loading…" });
+  renderControls(params);
+  params.set("sort_by", sort.by);
+  params.set("sort_order", sort.order);
+  params.set("page", page);
+  results.classList.add("loading");
+  results.setAttribute("aria-busy", "true");
   try {
     const response = await authFetch(`/invoices?${params}`);
     const body = await response.json().catch(() => ({}));
@@ -94,11 +119,28 @@ async function load() {
       return;
     }
     renderTable(tbody, body.items, columns(asOf));
+    table.hidden = body.items.length === 0;
     showMessage({ message: body.items.length ? "" : "No invoices match these filters." });
-    renderPager(pager, body, "invoices", (target) => { page = target; load(); });
+    if (body.items.length) renderPager(pager, body, (target) => { page = target; load(); });
+    else clearPager(pager);
   } catch (err) {
     if (ticket === request) showMessage({ error: `Request failed: ${err.message}` });
+  } finally {
+    if (ticket === request) {
+      results.classList.remove("loading");
+      results.removeAttribute("aria-busy");
+    }
   }
+}
+
+function clearFilters() {
+  form.reset();
+  form.elements.status.value = "";
+}
+
+function reload() {
+  page = 1;
+  load();
 }
 
 export function show() {
@@ -107,10 +149,11 @@ export function show() {
 
 export function reset() {
   request += 1;
+  clearTimeout(typingTimer);
   loaded = false;
   sort = { ...DEFAULT_SORT };
   page = 1;
-  form.reset();
+  clearFilters();
   tbody.replaceChildren();
   clearPager(pager);
   showMessage({});
@@ -118,20 +161,28 @@ export function reset() {
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  page = 1;
-  load();
+  reload();
 });
 
-form.querySelector(".clear").addEventListener("click", () => {
-  form.reset();
-  page = 1;
-  load();
+section.addEventListener("input", (e) => {
+  if (e.target.form !== form) return;
+  clearTimeout(typingTimer);
+  typingTimer = setTimeout(reload, e.target.type === "date" ? 0 : TYPING_DELAY_MS);
 });
+
+statusButtons.forEach((b) => b.addEventListener("click", () => {
+  form.elements.status.value = b.dataset.status;
+  reload();
+}));
+
+clearButtons.forEach((b) => b.addEventListener("click", () => {
+  clearFilters();
+  reload();
+}));
 
 sortHeaders.forEach((th) => th.querySelector("button").addEventListener("click", () => {
   sort = th.dataset.sort === sort.by
     ? { by: sort.by, order: sort.order === "asc" ? "desc" : "asc" }
     : { by: th.dataset.sort, order: "desc" };
-  page = 1;
-  load();
+  reload();
 }));

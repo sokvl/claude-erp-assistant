@@ -13,19 +13,28 @@ export function renderTable(tbody, rows, columns) {
   }));
 }
 
-export function renderPager(el, { page, pageSize, total }, noun, onPage) {
+export function renderPager(el, { page, pageSize, total }, onPage) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
-  const button = (label, enabled, target) => {
+  const button = (label, path, enabled, target) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.textContent = label;
+    b.className = "icon-button";
+    b.setAttribute("aria-label", label);
+    b.title = label;
+    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${path}"/></svg>`;
     b.disabled = !enabled;
     b.addEventListener("click", () => onPage(target));
     return b;
   };
+  const first = total ? (page - 1) * pageSize + 1 : 0;
+  const last = Math.min(page * pageSize, total);
   const label = document.createElement("span");
-  label.textContent = `Page ${page.toLocaleString()} of ${pages.toLocaleString()} · ${total.toLocaleString()} ${noun}`;
-  el.replaceChildren(button("Previous", page > 1, page - 1), label, button("Next", page < pages, page + 1));
+  label.textContent = `${first.toLocaleString("en-US")}–${last.toLocaleString("en-US")} of ${total.toLocaleString("en-US")}`;
+  el.replaceChildren(
+    label,
+    button("Previous page", "M15 6l-6 6 6 6", page > 1, page - 1),
+    button("Next page", "M9 6l6 6-6 6", page < pages, page + 1),
+  );
 }
 
 export function clearPager(el) {
@@ -33,7 +42,22 @@ export function clearPager(el) {
 }
 
 export function formatMoney(amount, currency) {
-  return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency, currencyDisplay: "code" }).format(amount);
+}
+
+export function formatPrice(amount) {
+  const whole = Number.isInteger(amount);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency", currency: "USD", minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+const DAY_FORMAT = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+
+export const formatDay = (iso) => (iso ? DAY_FORMAT.format(new Date(`${iso.slice(0, 10)}T00:00:00Z`)) : "");
+
+export function daysBetween(fromIso, toIso) {
+  return Math.round((Date.parse(toIso.slice(0, 10)) - Date.parse(fromIso.slice(0, 10))) / 86_400_000);
 }
 
 export function localToday() {
