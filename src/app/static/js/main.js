@@ -6,7 +6,6 @@ import * as sidebar from "./sidebar.js";
 const appEl = document.getElementById("app");
 const loginForm = document.getElementById("login");
 const loginError = loginForm.querySelector(".error");
-const whoEl = document.getElementById("who");
 
 function showLogin(message = "") {
   clearToken();
@@ -24,9 +23,8 @@ function signedIn(body) {
     return false;
   }
   setToken(body.access_token);
-  whoEl.textContent = `${body.username} · ${body.role}`;
   setAssistantRoles(body.role);
-  sidebar.render(routes);
+  sidebar.render(routes, body);
   loginForm.hidden = true;
   appEl.hidden = false;
   return body;

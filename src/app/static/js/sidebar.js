@@ -7,8 +7,11 @@ const sidebar = document.getElementById("sidebar");
 const backdrop = shell.querySelector(".backdrop");
 const items = sidebar.querySelectorAll(".nav-item[data-route]");
 
-export function render(routes) {
-  items.forEach((item) => { item.hidden = !routes.includes(item.dataset.route); });
+export function render(routes, { username, role }) {
+  sidebar.querySelectorAll("[data-route]").forEach((el) => { el.hidden = !routes.includes(el.dataset.route); });
+  sidebar.querySelector(".avatar").textContent = username.charAt(0);
+  sidebar.querySelector(".user-name").textContent = username;
+  sidebar.querySelector(".user-role").textContent = role;
 }
 
 export function setActive(route) {

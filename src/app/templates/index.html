@@ -24,9 +24,6 @@
   <div class="shell-body">
     <aside id="sidebar" class="sidebar">
       <nav class="nav" aria-label="Main">
-        <button id="new-chat" class="nav-item" type="button" data-route="chat">
-          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New chat
-        </button>
         <a class="nav-item" href="#/invoices" data-route="invoices">
           <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Invoices
         </a>
@@ -37,10 +34,21 @@
           <svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Audit
         </a>
       </nav>
-      <section id="history" class="history" aria-label="Chat history"></section>
-      <div class="sidebar-footer">
-        <span id="who" class="who"></span>
-        <button id="logout" type="button">Log out</button>
+      <div class="chat-group" data-route="chat">
+        <button id="new-chat" class="nav-item" type="button" data-route="chat">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New chat
+        </button>
+        <section id="history" class="history" aria-label="Chat history"></section>
+      </div>
+      <div class="user-card">
+        <span class="avatar" aria-hidden="true"></span>
+        <span class="user-meta">
+          <span class="user-name"></span>
+          <span class="user-role"></span>
+        </span>
+        <button id="logout" class="icon-button" type="button" aria-label="Log out" title="Log out">
+          <svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4"/></svg>
+        </button>
       </div>
     </aside>
     <div class="backdrop"></div>
