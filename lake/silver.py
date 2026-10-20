@@ -54,6 +54,7 @@ PROCESSED = "processed_bronze_partitions"
 ALIASES = "customer_aliases"
 CUSTOMERS = "customers"
 SNAPSHOT = "current"
+FACT_COLUMNS = ["invoice_id", "posting_month", "posting_date", "amount", "is_open", "quality_flags"]
 
 Rule = Callable[[pd.DataFrame], pd.Series]
 
@@ -239,7 +240,7 @@ def merge_month(
 
 
 def merge_silver(lake: Lake) -> SilverRun:
-    processed = (lake.read_pointer(Layer.SILVER, STATE) or {}).get(PROCESSED, [])
+    processed = read_processed_partitions(lake)
     pending = find_pending(lake.list_partitions(Layer.BRONZE, BRONZE_DATASET), processed)
     if not pending:
         return SilverRun(bronze_partitions=[], months=[], invoices=0, rejected=0, customers=0)
@@ -275,6 +276,46 @@ def merge_silver(lake: Lake) -> SilverRun:
     return SilverRun(
         bronze_partitions=pending, months=months, invoices=accepted_count, rejected=rejected_count, customers=len(customers)
     )
+
+
+def read_processed_partitions(lake: Lake) -> list[str]:
+    return (lake.read_pointer(Layer.SILVER, STATE) or {}).get(PROCESSED, [])
+
+
+def read_invoice_facts(lake: Lake) -> tuple[pd.DataFrame, pd.DataFrame]:
+    accepted, rejected = (
+        lake.read_dataset(Layer.SILVER, dataset, columns=FACT_COLUMNS, schema=schema).select(FACT_COLUMNS).to_pandas()
+        for dataset, schema in ((INVOICES, INVOICE_SCHEMA), (REJECTED, REJECTED_SCHEMA))
+    )
+    return accepted, rejected
+
+
+def find_schema_drift(lake: Lake) -> list[str]:
+    expected = {
+        INVOICES: INVOICE_SCHEMA,
+        LINES: LINE_SCHEMA,
+        REJECTED: REJECTED_SCHEMA,
+        REJECTED_LINES: LINE_SCHEMA,
+        ALIASES: ALIAS_SCHEMA,
+        CUSTOMERS: CUSTOMER_SCHEMA,
+    }
+    return [
+        dataset
+        for dataset, schema in expected.items()
+        if not all(found.equals(schema) for found in lake.read_part_schemas(Layer.SILVER, dataset))
+    ]
+
+
+def find_duplicate_ids(invoice_ids: pd.Series) -> list[str]:
+    return sorted(invoice_ids[invoice_ids.duplicated()].unique())
+
+
+def count_future_postings(posting_dates: pd.Series, now: pd.Timestamp) -> int:
+    return int((posting_dates > now).sum())
+
+
+def count_flagged(quality_flags: pd.Series) -> int:
+    return int(quality_flags.map(len).gt(0).sum())
 
 
 def read_stored_locations(lake: Lake) -> pd.DataFrame:

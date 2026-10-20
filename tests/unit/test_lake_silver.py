@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 
 from lake.bronze import DATASET as BRONZE_DATASET
@@ -22,8 +23,12 @@ from lake.silver import (
     derive,
     build_aliases,
     choose_canonical,
+    count_flagged,
+    count_future_postings,
     explode_lines,
     find_common_prefix,
+    find_duplicate_ids,
+    find_schema_drift,
     find_pending,
     find_winning_months,
     flatten_invoices,
@@ -31,6 +36,8 @@ from lake.silver import (
     keep_latest_lines,
     merge_aliases,
     merge_silver,
+    read_invoice_facts,
+    read_processed_partitions,
     standardize,
     validate,
 )
@@ -686,3 +693,72 @@ def test_merge_silver_writes_the_declared_customer_schemas(lake):
     # Assert
     assert lake.read_part_schemas(Layer.SILVER, ALIASES) == [ALIAS_SCHEMA]
     assert lake.read_part_schemas(Layer.SILVER, CUSTOMERS) == [CUSTOMER_SCHEMA]
+
+
+def test_read_invoice_facts_reads_accepted_and_rejected_separately(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"), _invoice("S2", amount=0.0, lines=[_line(1, 0.0)]))
+    merge_silver(lake)
+
+    # Act
+    accepted, rejected = read_invoice_facts(lake)
+
+    # Assert
+    assert (accepted["invoice_id"].tolist(), rejected["invoice_id"].tolist()) == (["S1"], ["S2"])
+    assert list(accepted.columns) == ["invoice_id", "posting_month", "posting_date", "amount", "is_open", "quality_flags"]
+
+
+def test_read_processed_partitions_is_empty_before_the_first_merge(lake):
+    # Arrange / Act
+    processed = read_processed_partitions(lake)
+
+    # Assert
+    assert processed == []
+
+
+def test_find_schema_drift_names_a_dataset_whose_file_has_another_schema(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"))
+    merge_silver(lake)
+    lake.replace_partition(Layer.SILVER, CUSTOMERS, "current", [pa.table({"customer_number": ["1"]})])
+
+    # Act
+    drift = find_schema_drift(lake)
+
+    # Assert
+    assert drift == [CUSTOMERS]
+
+
+# Each invoice lives in exactly one month and one of accepted or rejected, so an id seen twice
+# across all files means a merge went wrong.
+@pytest.mark.parametrize(
+    ("ids", "expected"),
+    [(["S1", "S2"], []), (["S1", "S2", "S1"], ["S1"]), (["S2", "S1", "S2", "S1", "S2"], ["S1", "S2"])],
+    ids=["all_unique", "one_twice", "several_reported_once_each"],
+)
+def test_find_duplicate_ids_reports_each_repeated_id_once(ids, expected):
+    # Arrange / Act
+    duplicates = find_duplicate_ids(pd.Series(ids))
+
+    # Assert
+    assert duplicates == expected
+
+
+def test_count_future_postings_counts_dates_after_now():
+    # Arrange
+    now = pd.Timestamp("2026-10-20 12:00", tz="UTC")
+    dates = pd.Series(pd.to_datetime(["2026-10-20 11:59", "2026-10-20 12:00", "2026-10-21 00:00"], utc=True))
+
+    # Act
+    future = count_future_postings(dates, now)
+
+    # Assert
+    assert future == 1
+
+
+def test_count_flagged_counts_invoices_with_at_least_one_flag():
+    # Arrange / Act
+    flagged = count_flagged(pd.Series([[], ["due_before_posting"], ["a", "b"]]))
+
+    # Assert
+    assert flagged == 2
