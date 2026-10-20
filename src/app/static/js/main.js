@@ -1,7 +1,8 @@
 import { clearToken, login, logout, onSessionLost, onSignedIn, refreshSession, setToken } from "./api.js";
 import { initChat, setAssistantRoles, startConversation } from "./chat.js";
+import * as router from "./router.js";
+import * as sidebar from "./sidebar.js";
 
-const CHAT_ROLES = ["consultant", "manager"];
 const appEl = document.getElementById("app");
 const loginForm = document.getElementById("login");
 const loginError = loginForm.querySelector(".error");
@@ -16,21 +17,28 @@ function showLogin(message = "") {
 }
 
 function signedIn(body) {
-  if (!CHAT_ROLES.includes(body.role)) {
+  const routes = router.routesFor(body.role);
+  if (!routes.length) {
     logout();
-    showLogin("This account has no access to the assistant.");
+    showLogin("This account has no access to this application.");
     return false;
   }
   setToken(body.access_token);
   whoEl.textContent = `${body.username} · ${body.role}`;
   setAssistantRoles(body.role);
+  sidebar.render(routes);
   loginForm.hidden = true;
   appEl.hidden = false;
+  router.start(body.role);
   return true;
 }
 
 onSignedIn(signedIn);
-onSessionLost(showLogin);
+onSessionLost((message) => {
+  router.stop();
+  showLogin(message);
+});
+router.onNavigate(sidebar.setActive);
 initChat();
 
 loginForm.addEventListener("submit", async (e) => {
@@ -56,7 +64,7 @@ loginForm.addEventListener("submit", async (e) => {
 
 document.getElementById("logout").addEventListener("click", async () => {
   await logout();
-  startConversation("Signed out.");
+  router.stop();
   showLogin();
 });
 

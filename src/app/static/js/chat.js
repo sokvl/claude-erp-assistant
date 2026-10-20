@@ -312,9 +312,18 @@ export function setAssistantRoles(role) {
   }
 }
 
+export function show() {}
+
+export function reset() {
+  startConversation("Signed out.");
+}
+
 export function initChat() {
   renderSuggestions();
-  document.getElementById("reset").addEventListener("click", () => startConversation("New conversation started."));
+  document.getElementById("new-chat").addEventListener("click", () => {
+    startConversation("New conversation started.");
+    location.hash = "#/chat";
+  });
   assistantSelect.addEventListener("change", () => {
     input.placeholder = placeholders[assistantSelect.value];
     startConversation(`New conversation with the ${assistantSelect.selectedOptions[0].text.toLowerCase()}.`);
