@@ -1,18 +1,32 @@
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pandas as pd
 import pytest
 
+from lake.bronze import DATASET as BRONZE_DATASET
 from lake.bronze import to_table
+from lake.settings import LakeSettings, Layer
 from lake.silver import (
+    INVOICE_SCHEMA,
+    INVOICES,
+    LINES,
+    PROCESSED,
+    REJECTED,
+    REJECTED_LINES,
+    STATE,
     derive,
     explode_lines,
+    find_pending,
+    find_winning_months,
     flatten_invoices,
     keep_latest,
     keep_latest_lines,
+    merge_silver,
     standardize,
     validate,
 )
+from lake.storage import Lake
 
 EXTRACTED = datetime(2026, 10, 16, 1, tzinfo=UTC)
 LATER = datetime(2026, 10, 19, 7, tzinfo=UTC)
@@ -133,6 +147,19 @@ def test_keep_latest_lines_follow_the_kept_version():
 
     # Assert
     assert lines[["line_no", "sku", "line_total"]].values.tolist() == [[1, "SRV-DELL-R660", 30.0]]
+
+
+# Replaying merged bronze brings the version silver already holds; its lines must not double.
+def test_keep_latest_lines_same_version_twice_keeps_each_line_once():
+    # Arrange
+    bronze = _bronze(_invoice(amount=30.0, lines=[_line(1, 10.0), _line(2, 20.0)]))
+    lines = pd.concat([explode_lines(bronze), explode_lines(bronze)], ignore_index=True)
+
+    # Act
+    kept = keep_latest_lines(lines, keep_latest(flatten_invoices(bronze)))
+
+    # Assert
+    assert kept["line_total"].tolist() == [10.0, 20.0]
 
 
 @pytest.mark.parametrize(
@@ -282,3 +309,213 @@ def test_flatten_invoices_drops_the_close_reason_from_silver():
 
     # Assert
     assert "closed_reason" not in frame.columns
+
+
+@pytest.fixture
+def lake():
+    # Arrange: every test gets its own root, because fsspec's memory filesystem is one process-wide store
+    root = f"memory://silver-{uuid4().hex}"
+    return Lake(LakeSettings(layer_uris={layer: f"{root}/{layer}" for layer in Layer}))
+
+
+def _land(lake, hour, *documents, extracted_at=EXTRACTED):
+    lake.replace_partition(Layer.BRONZE, BRONZE_DATASET, f"changed_at={hour}", [_bronze(*documents, extracted_at=extracted_at)])
+
+
+def _read(lake, dataset, month=None):
+    partitions = None if month is None else [f"posting_month={month}"]
+    return lake.read_dataset(Layer.SILVER, dataset, partitions).to_pandas()
+
+
+def _closed(key="S1", **changes):
+    return _invoice(key, isOpen=False, updated=datetime(2026, 10, 19, 6, 51),
+                    dates={"clearDate": datetime(2026, 9, 10)}, **changes)
+
+
+# Dagster can materialize a failed hour again after later ones succeeded; a "last partition"
+# pointer would skip it forever, a set of processed names does not.
+@pytest.mark.parametrize(
+    ("bronze", "processed", "expected"),
+    [
+        (["changed_at=2026-10-16-00", "changed_at=2026-10-16-01"], [], ["changed_at=2026-10-16-00", "changed_at=2026-10-16-01"]),
+        (["changed_at=2026-10-16-00", "changed_at=2026-10-16-01"], ["changed_at=2026-10-16-00"], ["changed_at=2026-10-16-01"]),
+        (["changed_at=2026-10-16-00", "changed_at=2026-10-16-01", "changed_at=2026-10-16-02"],
+         ["changed_at=2026-10-16-00", "changed_at=2026-10-16-02"], ["changed_at=2026-10-16-01"]),
+        (["changed_at=2026-10-16-00"], ["changed_at=2026-10-16-00"], []),
+    ],
+    ids=["first_run", "next_hour", "hour_landed_late", "nothing_new"],
+)
+def test_find_pending_returns_every_bronze_partition_not_processed_yet(bronze, processed, expected):
+    # Arrange / Act
+    pending = find_pending(bronze, processed)
+
+    # Assert
+    assert pending == expected
+
+
+def _locations(*rows):
+    return pd.DataFrame(rows, columns=["invoice_id", "updated_at", "extracted_at", "posting_month"])
+
+
+OLD = pd.Timestamp("2026-10-15", tz="UTC")
+NEW = pd.Timestamp("2026-10-19", tz="UTC")
+
+
+# The month an invoice lives in is decided by its newest version, wherever each version sits.
+@pytest.mark.parametrize(
+    ("stored", "arriving", "expected"),
+    [
+        (_locations(), _locations(("S1", NEW, NEW, "2026-09")), "2026-09"),
+        (_locations(("S1", OLD, OLD, "2026-09")), _locations(("S1", NEW, NEW, "2026-10")), "2026-10"),
+        (_locations(("S1", NEW, NEW, "2026-10")), _locations(("S1", OLD, NEW, "2026-09")), "2026-10"),
+    ],
+    ids=["new_invoice", "newer_version_moved_month", "replayed_older_version_loses"],
+)
+def test_find_winning_months_follows_the_newest_version(stored, arriving, expected):
+    # Arrange / Act
+    months = find_winning_months(arriving, stored)
+
+    # Assert
+    assert months.to_dict() == {"S1": expected}
+
+
+def test_merge_silver_first_run_writes_one_partition_per_posting_month(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"), _invoice("S2", dates={"postingDate": datetime(2026, 8, 5)}))
+
+    # Act
+    run = merge_silver(lake)
+
+    # Assert
+    assert (run.bronze_partitions, run.months, run.invoices, run.rejected) == (
+        ["changed_at=2026-10-16-00"], ["2026-08", "2026-09"], 2, 0
+    )
+    assert lake.list_partitions(Layer.SILVER, INVOICES) == ["posting_month=2026-08", "posting_month=2026-09"]
+    assert lake.read_pointer(Layer.SILVER, STATE) == {PROCESSED: ["changed_at=2026-10-16-00"]}
+
+
+def test_merge_silver_without_new_bronze_does_nothing(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"))
+    merge_silver(lake)
+
+    # Act
+    run = merge_silver(lake)
+
+    # Assert
+    assert (run.bronze_partitions, run.months) == ([], [])
+    assert len(_read(lake, INVOICES)) == 1
+
+
+# Closing one September invoice must cost one month of rewriting, not the whole history.
+def test_merge_silver_change_rewrites_only_the_month_it_touches(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"), _invoice("S2", dates={"postingDate": datetime(2026, 8, 5)}))
+    merge_silver(lake)
+    august_files = lake.list_part_files(Layer.SILVER, INVOICES, ["posting_month=2026-08"])
+    _land(lake, "2026-10-19-06", _closed("S1"), extracted_at=LATER)
+
+    # Act
+    run = merge_silver(lake)
+
+    # Assert
+    september = _read(lake, INVOICES, "2026-09")
+    assert run.months == ["2026-09"]
+    assert september[["invoice_id", "is_open", "days_to_pay"]].values.tolist() == [["S1", False, 9]]
+    assert lake.list_part_files(Layer.SILVER, INVOICES, ["posting_month=2026-08"]) == august_files
+
+
+# The state is written last, so a crash replays bronze already merged; replaying must change nothing.
+def test_merge_silver_replaying_processed_bronze_gives_the_same_silver(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1", lines=[_line(1, 40.0), _line(2, 60.0)]))
+    _land(lake, "2026-10-19-06", _closed("S1", lines=[_line(1, 40.0), _line(2, 60.0)]), extracted_at=LATER)
+    merge_silver(lake)
+    before = (_read(lake, INVOICES), _read(lake, LINES))
+    lake.write_pointer(Layer.SILVER, STATE, {PROCESSED: []})
+
+    # Act
+    merge_silver(lake)
+
+    # Assert
+    pd.testing.assert_frame_equal(_read(lake, INVOICES), before[0])
+    pd.testing.assert_frame_equal(_read(lake, LINES), before[1])
+
+
+# A posting date never changes in the app, but if bad data moves one, silver must not count the
+# invoice in both months.
+def test_merge_silver_invoice_moving_month_leaves_its_old_month(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"), _invoice("S2"))
+    merge_silver(lake)
+    moved = _invoice("S1", updated=datetime(2026, 10, 19, 6), dates={"postingDate": datetime(2026, 10, 1)})
+    _land(lake, "2026-10-19-06", moved, extracted_at=LATER)
+
+    # Act
+    run = merge_silver(lake)
+
+    # Assert
+    assert run.months == ["2026-09", "2026-10"]
+    assert _read(lake, INVOICES, "2026-09")["invoice_id"].tolist() == ["S2"]
+    assert _read(lake, INVOICES, "2026-10")["invoice_id"].tolist() == ["S1"]
+    assert sorted(_read(lake, LINES)["invoice_id"]) == ["S1", "S2"]
+
+
+# Quarantine is part of a month's current state: reading only the accepted rows would leave the
+# bad version behind in quarantine after the fix arrives.
+def test_merge_silver_corrected_invoice_leaves_quarantine_with_its_lines(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1", amount=0.0, lines=[_line(1, 0.0)]))
+    merge_silver(lake)
+    rejected_first = _read(lake, REJECTED)
+    corrected = _invoice("S1", amount=50.0, lines=[_line(1, 50.0)], updated=datetime(2026, 10, 19, 6))
+    _land(lake, "2026-10-19-06", corrected, extracted_at=LATER)
+
+    # Act
+    run = merge_silver(lake)
+
+    # Assert
+    assert rejected_first["rejection_reasons"].tolist() == [["amount_not_positive"]]
+    assert (run.invoices, run.rejected) == (1, 0)
+    assert _read(lake, INVOICES)["amount"].tolist() == [50.0]
+    assert _read(lake, LINES)["line_total"].tolist() == [50.0]
+    assert _read(lake, REJECTED).empty and _read(lake, REJECTED_LINES).empty
+
+
+# Every file of a dataset must share one schema, even when no row has a flag to infer types from.
+def test_merge_silver_writes_the_declared_schema(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"))
+
+    # Act
+    merge_silver(lake)
+
+    # Assert
+    assert lake.read_part_schemas(Layer.SILVER, INVOICES) == [INVOICE_SCHEMA]
+
+
+def test_merge_silver_month_left_without_invoices_disappears(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"))
+    merge_silver(lake)
+    moved = _invoice("S1", updated=datetime(2026, 10, 19, 6), dates={"postingDate": datetime(2026, 10, 1)})
+    _land(lake, "2026-10-19-06", moved, extracted_at=LATER)
+
+    # Act
+    merge_silver(lake)
+
+    # Assert
+    assert lake.list_partitions(Layer.SILVER, INVOICES) == ["posting_month=2026-10"]
+    assert lake.list_partitions(Layer.SILVER, LINES) == ["posting_month=2026-10"]
+
+
+def test_merge_silver_invoice_without_lines_is_kept_and_flagged(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1", lines=[]))
+
+    # Act
+    merge_silver(lake)
+
+    # Assert
+    assert _read(lake, INVOICES)["quality_flags"].tolist() == [["lines_do_not_match_amount"]]
+    assert lake.list_partitions(Layer.SILVER, LINES) == []
