@@ -29,8 +29,13 @@ function signedIn(body) {
   sidebar.render(routes);
   loginForm.hidden = true;
   appEl.hidden = false;
+  return body;
+}
+
+function enter(body, note) {
+  startConversation(note);
+  sidebar.refreshHistory();
   router.start(body.role);
-  return true;
 }
 
 onSignedIn(signedIn);
@@ -54,7 +59,7 @@ loginForm.addEventListener("submit", async (e) => {
       return;
     }
     loginForm.password.value = "";
-    if (signedIn(body)) startConversation(`Signed in as ${body.username}.`);
+    if (signedIn(body)) enter(body, `Signed in as ${body.username}.`);
   } catch (err) {
     loginError.textContent = `Request failed: ${err.message}`;
   } finally {
@@ -68,4 +73,4 @@ document.getElementById("logout").addEventListener("click", async () => {
   showLogin();
 });
 
-refreshSession().then((ok) => { if (ok) startConversation("Session restored."); else showLogin(); });
+refreshSession().then((body) => { if (body) enter(body, "Session restored."); else showLogin(); });

@@ -1,4 +1,7 @@
+import { listConversations } from "./conversations.js";
+
 const shell = document.getElementById("app");
+const historyEl = document.getElementById("history");
 const menu = document.getElementById("menu");
 const sidebar = document.getElementById("sidebar");
 const backdrop = shell.querySelector(".backdrop");
@@ -13,7 +16,55 @@ export function setActive(route) {
     if (item.dataset.route === route) item.setAttribute("aria-current", "page");
     else item.removeAttribute("aria-current");
   });
+  markHistory();
   closeDrawer();
+}
+
+function markHistory() {
+  historyEl.querySelectorAll("a").forEach((link) => {
+    if (link.getAttribute("href") === location.hash) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+}
+
+function heading(text) {
+  const h = document.createElement("h2");
+  h.textContent = text;
+  return h;
+}
+
+function note(text) {
+  const p = document.createElement("p");
+  p.className = "history-note";
+  p.textContent = text;
+  return p;
+}
+
+function historyLink(conversation) {
+  const link = document.createElement("a");
+  link.className = "history-item";
+  link.href = `#/chat/${encodeURIComponent(conversation.id)}`;
+  link.textContent = conversation.title;
+  link.title = conversation.title;
+  link.addEventListener("click", closeDrawer);
+  return link;
+}
+
+export async function refreshHistory() {
+  const { items, placeholder } = await listConversations();
+  if (placeholder) {
+    historyEl.replaceChildren(heading("History"), note("Chat history will appear here."));
+    return;
+  }
+  if (!items.length) {
+    historyEl.replaceChildren(heading("History"), note("No conversations yet."));
+    return;
+  }
+  const today = new Date().toDateString();
+  const isToday = (c) => new Date(c.lastMessageAt).toDateString() === today;
+  const groups = [["Today", items.filter(isToday)], ["Earlier", items.filter((c) => !isToday(c))]];
+  historyEl.replaceChildren(...groups.filter(([, group]) => group.length).flatMap(([label, group]) => [heading(label), ...group.map(historyLink)]));
+  markHistory();
 }
 
 function openDrawer() {

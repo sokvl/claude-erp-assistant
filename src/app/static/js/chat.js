@@ -1,4 +1,6 @@
 import { authFetch, describeProblem } from "./api.js";
+import { loadConversation } from "./conversations.js";
+import { refreshHistory } from "./sidebar.js";
 import { localToday } from "./table.js";
 
 marked.setOptions({ gfm: true, breaks: true });
@@ -240,8 +242,10 @@ async function submit(e) {
         if (!parsed) continue;
         const { event, data } = parsed;
 
-        if (event === "conversation") conversationId = data.conversation_id;
-        else if (event === "tool") {
+        if (event === "conversation") {
+          conversationId = data.conversation_id;
+          if (location.hash.startsWith("#/chat")) history.replaceState(null, "", `#/chat/${encodeURIComponent(conversationId)}`);
+        } else if (event === "tool") {
           stopThinking();
           if (data.name !== lastTool) addNote(`looking up: ${data.name}`, "tool");
           lastTool = data.name;
@@ -264,6 +268,7 @@ async function submit(e) {
           log.scrollTop = log.scrollHeight;
         } else if (event === "done") {
           finished = true;
+          refreshHistory();
           if (data.truncated) addNote("Answer was cut off at the length limit.");
         } else if (event === "error") {
           finished = true;
@@ -284,7 +289,7 @@ async function submit(e) {
   }
 }
 
-export function startConversation(note) {
+function clearConversation() {
   generation += 1;
   activeChat?.abort();
   activeChat = null;
@@ -293,8 +298,41 @@ export function startConversation(note) {
   stopSuggestions();
   chartUrls.splice(0).forEach(URL.revokeObjectURL);
   log.innerHTML = "";
+}
+
+function leaveConversationRoute() {
+  if (location.hash.startsWith("#/chat/")) history.replaceState(null, "", "#/chat");
+}
+
+function useAssistant(name) {
+  assistantSelect.value = name;
+  input.placeholder = placeholders[name];
+}
+
+export function startConversation(note) {
+  clearConversation();
   addNote(note);
   renderSuggestions();
+}
+
+export async function show(id) {
+  if (!id || id === conversationId) return;
+  const turn = generation;
+  const conversation = await loadConversation(id);
+  if (turn !== generation || location.hash !== `#/chat/${encodeURIComponent(id)}`) return;
+  if (!conversation) {
+    leaveConversationRoute();
+    startConversation("This conversation can't be reopened yet. Started a new one.");
+    return;
+  }
+  clearConversation();
+  conversationId = id;
+  useAssistant(conversation.assistant);
+  for (const message of conversation.messages) {
+    if (message.role === "user") add("msg user", message.content);
+    else renderMarkdown(add("msg assistant", ""), message.content);
+    (message.chartIds ?? []).forEach(addChart);
+  }
 }
 
 export function setAssistantRoles(role) {
@@ -306,8 +344,6 @@ export function setAssistantRoles(role) {
     input.placeholder = placeholders.advisor;
   }
 }
-
-export function show() {}
 
 export function reset() {
   startConversation("Signed out.");
@@ -321,6 +357,7 @@ export function initChat() {
   });
   assistantSelect.addEventListener("change", () => {
     input.placeholder = placeholders[assistantSelect.value];
+    leaveConversationRoute();
     startConversation(`New conversation with the ${assistantSelect.selectedOptions[0].text.toLowerCase()}.`);
   });
   input.addEventListener("keydown", (e) => {
