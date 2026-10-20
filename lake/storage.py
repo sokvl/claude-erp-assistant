@@ -36,7 +36,12 @@ def open_location(settings: LakeSettings, layer: Layer) -> tuple[AbstractFileSys
     return url_to_fs(uri, **build_storage_options(settings, uri))
 
 
-def write_parts(fs: AbstractFileSystem, directory: str, chunks: Iterable[pa.Table | pa.RecordBatch]) -> int:
+def write_parts(
+    fs: AbstractFileSystem,
+    directory: str,
+    chunks: Iterable[pa.Table | pa.RecordBatch],
+    empty_schema: pa.Schema | None = None,
+) -> int:
     rows = 0
     non_empty = (chunk for chunk in chunks if chunk.num_rows)
     for index, chunk in enumerate(non_empty):
@@ -44,6 +49,9 @@ def write_parts(fs: AbstractFileSystem, directory: str, chunks: Iterable[pa.Tabl
         with fs.open(f"{directory}/{PART_FILE.format(index)}", "wb") as stream:
             pq.write_table(table, stream)
         rows += table.num_rows
+    if rows == 0 and empty_schema is not None:
+        with fs.open(f"{directory}/{PART_FILE.format(0)}", "wb") as stream:
+            pq.write_table(empty_schema.empty_table(), stream)
     return rows
 
 
@@ -61,12 +69,17 @@ class Lake:
         self._locations: dict[Layer, tuple[AbstractFileSystem, str]] = {}
 
     def replace_partition(
-        self, layer: Layer, dataset: str, partition: str, chunks: Iterable[pa.Table | pa.RecordBatch]
+        self,
+        layer: Layer,
+        dataset: str,
+        partition: str,
+        chunks: Iterable[pa.Table | pa.RecordBatch],
+        empty_schema: pa.Schema | None = None,
     ) -> int:
         fs, _ = self._resolve(layer)
         directory = self.build_partition_path(layer, dataset, partition)
         self._delete_if_present(fs, directory)
-        return write_parts(fs, directory, chunks)
+        return write_parts(fs, directory, chunks, empty_schema)
 
     def iter_batches(
         self,

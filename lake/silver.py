@@ -1,9 +1,15 @@
-from collections.abc import Callable, Mapping
+import os
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
+
+from lake.bronze import BRONZE_SCHEMA, LINE, TIMESTAMP
+from lake.bronze import DATASET as BRONZE_DATASET
+from lake.settings import Layer
+from lake.storage import Lake
 
 INVOICE_COLUMNS = {
     "_id": "invoice_id",
@@ -36,7 +42,19 @@ LINE_COLUMNS = {
     "lineTotal": "line_total",
 }
 VERSION = ["invoice_id", "updated_at", "extracted_at"]
+LOCATION = [*VERSION, "posting_month"]
 CENT = 0.01
+
+INVOICES = "invoices"
+LINES = "invoice_lines"
+REJECTED = "invoices_rejected"
+REJECTED_LINES = "invoice_lines_rejected"
+STATE = "_invoices_state.json"
+PROCESSED = "processed_bronze_partitions"
+ALIASES = "customer_aliases"
+CUSTOMERS = "customers"
+SNAPSHOT = "current"
+FACT_COLUMNS = ["invoice_id", "posting_month", "posting_date", "amount", "is_open", "quality_flags"]
 
 Rule = Callable[[pd.DataFrame], pd.Series]
 
@@ -60,9 +78,56 @@ class Validated:
     rejected: pd.DataFrame
 
 
-def flatten_invoices(bronze: pa.Table) -> pd.DataFrame:
+@dataclass(frozen=True)
+class MonthResult:
+    invoices: pd.DataFrame
+    lines: pd.DataFrame
+    rejected: pd.DataFrame
+    rejected_lines: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class SilverRun:
+    bronze_partitions: list[str]
+    months: list[str]
+    invoices: int
+    rejected: int
+    customers: int
+
+
+def name_invoice_columns(bronze: pa.Table) -> pa.Table:
     flat = bronze.drop_columns(["lines"]).flatten()
-    return flat.select(list(INVOICE_COLUMNS)).rename_columns(list(INVOICE_COLUMNS.values())).to_pandas()
+    return flat.select(list(INVOICE_COLUMNS)).rename_columns(list(INVOICE_COLUMNS.values()))
+
+
+FLAGS = pa.list_(pa.string())
+BASE_SCHEMA = name_invoice_columns(BRONZE_SCHEMA.empty_table()).schema
+INVOICE_SCHEMA = pa.schema(
+    [
+        *BASE_SCHEMA,
+        ("days_to_pay", pa.int64()),
+        ("paid_late", pa.bool_()),
+        ("posting_month", pa.string()),
+        ("lines_total", pa.float64()),
+        ("quality_flags", FLAGS),
+    ]
+)
+REJECTED_SCHEMA = INVOICE_SCHEMA.append(pa.field("rejection_reasons", FLAGS))
+LINE_SCHEMA = pa.schema(
+    [
+        ("invoice_id", pa.string()),
+        ("updated_at", TIMESTAMP),
+        ("extracted_at", TIMESTAMP),
+        *[(LINE_COLUMNS[field.name], field.type) for field in LINE],
+        ("posting_month", pa.string()),
+    ]
+)
+ALIAS_SCHEMA = pa.schema([("customer_number", pa.string()), ("name", pa.string()), ("last_seen", TIMESTAMP)])
+CUSTOMER_SCHEMA = pa.schema([("customer_number", pa.string()), ("canonical_name", pa.string()), ("alias_count", pa.int64())])
+
+
+def flatten_invoices(bronze: pa.Table) -> pd.DataFrame:
+    return name_invoice_columns(bronze).to_pandas()
 
 
 def explode_lines(bronze: pa.Table) -> pd.DataFrame:
@@ -88,7 +153,7 @@ def keep_latest(invoices: pd.DataFrame) -> pd.DataFrame:
 
 
 def keep_latest_lines(lines: pd.DataFrame, latest_invoices: pd.DataFrame) -> pd.DataFrame:
-    kept = lines.merge(latest_invoices[VERSION], on=VERSION, how="inner")
+    kept = lines.merge(latest_invoices[VERSION], on=VERSION, how="inner").drop_duplicates(["invoice_id", "line_no"])
     return kept.sort_values(["invoice_id", "line_no"]).reset_index(drop=True)
 
 
@@ -135,3 +200,198 @@ def collapse_whitespace(values: pd.Series) -> pd.Series:
 
 def name_month(dates: pd.Series) -> pd.Series:
     return dates.dt.strftime("%Y-%m")
+
+
+def build_month_partition(month: str) -> str:
+    return f"posting_month={month}"
+
+
+def find_pending(bronze_partitions: Iterable[str], processed: Iterable[str]) -> list[str]:
+    return sorted(set(bronze_partitions) - set(processed))
+
+
+def find_winning_months(new_invoices: pd.DataFrame, previous_locations: pd.DataFrame) -> pd.Series:
+    all_versions = concatenate_frames([previous_locations[LOCATION], new_invoices[LOCATION]])
+    return keep_latest(all_versions).set_index("invoice_id")["posting_month"]
+
+
+def merge_month(
+    month: str,
+    current_invoices: pd.DataFrame,
+    current_lines: pd.DataFrame,
+    new_invoices: pd.DataFrame,
+    new_lines: pd.DataFrame,
+    winning_month_by_invoice: pd.Series,
+) -> MonthResult:
+    columns = BASE_SCHEMA.names
+    latest_versions = keep_latest(concatenate_frames([current_invoices[columns], new_invoices[columns]]))
+    winning_month = latest_versions["invoice_id"].map(winning_month_by_invoice)
+    belongs_here = winning_month.isna() | (winning_month == month)
+    invoices = latest_versions[belongs_here].reset_index(drop=True)
+    lines = keep_latest_lines(concatenate_frames([current_lines, new_lines]), invoices)
+    validated = validate(derive(standardize(invoices)), lines)
+    is_accepted_line = lines["invoice_id"].isin(validated.invoices["invoice_id"])
+    return MonthResult(
+        invoices=validated.invoices,
+        lines=lines[is_accepted_line].reset_index(drop=True),
+        rejected=validated.rejected,
+        rejected_lines=lines[~is_accepted_line].reset_index(drop=True),
+    )
+
+
+def merge_silver(lake: Lake) -> SilverRun:
+    processed = read_processed_partitions(lake)
+    pending = find_pending(lake.list_partitions(Layer.BRONZE, BRONZE_DATASET), processed)
+    if not pending:
+        return SilverRun(bronze_partitions=[], months=[], invoices=0, rejected=0, customers=0)
+    bronze = lake.read_dataset(Layer.BRONZE, BRONZE_DATASET, pending, schema=BRONZE_SCHEMA)
+    new_invoices = keep_latest(flatten_invoices(bronze))
+    new_invoices["posting_month"] = name_month(new_invoices["posting_date"])
+    new_lines = keep_latest_lines(explode_lines(bronze), new_invoices)
+    stored_locations = read_stored_locations(lake)
+    previous_locations = stored_locations[stored_locations["invoice_id"].isin(new_invoices["invoice_id"])]
+    winning_month_by_invoice = find_winning_months(new_invoices, previous_locations)
+    months = sorted(set(new_invoices["posting_month"].dropna()) | set(previous_locations["posting_month"]))
+    new_invoices_by_month = dict(list(new_invoices.groupby("posting_month")))
+    new_lines_by_month = dict(list(new_lines.groupby("posting_month")))
+    new_aliases = [ALIAS_SCHEMA.empty_table().to_pandas()]
+    accepted_count = rejected_count = 0
+    for month in months:
+        result = merge_month(
+            month,
+            read_stored_month(lake, INVOICES, REJECTED, month, INVOICE_SCHEMA, REJECTED_SCHEMA),
+            read_stored_month(lake, LINES, REJECTED_LINES, month, LINE_SCHEMA, LINE_SCHEMA),
+            new_invoices_by_month.get(month, new_invoices.iloc[:0]),
+            new_lines_by_month.get(month, new_lines.iloc[:0]),
+            winning_month_by_invoice,
+        )
+        write_month(lake, month, result)
+        new_aliases.append(build_aliases(result.invoices))
+        accepted_count += len(result.invoices)
+        rejected_count += len(result.rejected)
+    aliases = merge_aliases(read_stored_aliases(lake), concatenate_frames(new_aliases))
+    customers = choose_canonical(aliases)
+    write_customers(lake, aliases, customers)
+    lake.write_pointer(Layer.SILVER, STATE, {PROCESSED: sorted({*processed, *pending})})
+    return SilverRun(
+        bronze_partitions=pending, months=months, invoices=accepted_count, rejected=rejected_count, customers=len(customers)
+    )
+
+
+def read_processed_partitions(lake: Lake) -> list[str]:
+    return (lake.read_pointer(Layer.SILVER, STATE) or {}).get(PROCESSED, [])
+
+
+def read_invoice_facts(lake: Lake) -> tuple[pd.DataFrame, pd.DataFrame]:
+    accepted, rejected = (
+        lake.read_dataset(Layer.SILVER, dataset, columns=FACT_COLUMNS, schema=schema).select(FACT_COLUMNS).to_pandas()
+        for dataset, schema in ((INVOICES, INVOICE_SCHEMA), (REJECTED, REJECTED_SCHEMA))
+    )
+    return accepted, rejected
+
+
+def find_schema_drift(lake: Lake) -> list[str]:
+    expected = {
+        INVOICES: INVOICE_SCHEMA,
+        LINES: LINE_SCHEMA,
+        REJECTED: REJECTED_SCHEMA,
+        REJECTED_LINES: LINE_SCHEMA,
+        ALIASES: ALIAS_SCHEMA,
+        CUSTOMERS: CUSTOMER_SCHEMA,
+    }
+    return [
+        dataset
+        for dataset, schema in expected.items()
+        if not all(found.equals(schema) for found in lake.read_part_schemas(Layer.SILVER, dataset))
+    ]
+
+
+def find_duplicate_ids(invoice_ids: pd.Series) -> list[str]:
+    return sorted(invoice_ids[invoice_ids.duplicated()].unique())
+
+
+def count_future_postings(posting_dates: pd.Series, now: pd.Timestamp) -> int:
+    return int((posting_dates > now).sum())
+
+
+def count_flagged(quality_flags: pd.Series) -> int:
+    return int(quality_flags.map(len).gt(0).sum())
+
+
+def read_stored_locations(lake: Lake) -> pd.DataFrame:
+    tables = [
+        lake.read_dataset(Layer.SILVER, dataset, columns=LOCATION, schema=schema).select(LOCATION)
+        for dataset, schema in ((INVOICES, INVOICE_SCHEMA), (REJECTED, REJECTED_SCHEMA))
+    ]
+    return pa.concat_tables(tables).to_pandas()
+
+
+def find_common_prefix(names: Iterable[str]) -> str:
+    return " ".join(os.path.commonprefix([name.split(" ") for name in names]))
+
+
+def build_aliases(invoices: pd.DataFrame) -> pd.DataFrame:
+    named = invoices.dropna(subset=["customer_number", "customer_name"])
+    latest = named.groupby(["customer_number", "customer_name"], as_index=False)["posting_date"].max()
+    return latest.rename(columns={"customer_name": "name", "posting_date": "last_seen"})[ALIAS_SCHEMA.names]
+
+
+def merge_aliases(stored: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    combined = concatenate_frames([stored[ALIAS_SCHEMA.names], new[ALIAS_SCHEMA.names]])
+    return combined.groupby(["customer_number", "name"], as_index=False)["last_seen"].max()
+
+
+def choose_canonical(aliases: pd.DataFrame) -> pd.DataFrame:
+    ordered = aliases.sort_values(["customer_number", "last_seen", "name"])
+    customers = [
+        {
+            "customer_number": number,
+            "canonical_name": find_common_prefix(names["name"]) or names["name"].iloc[-1],
+            "alias_count": len(names),
+        }
+        for number, names in ordered.groupby("customer_number")
+    ]
+    return pd.DataFrame(customers, columns=CUSTOMER_SCHEMA.names)
+
+
+def read_stored_aliases(lake: Lake) -> pd.DataFrame:
+    return lake.read_dataset(Layer.SILVER, ALIASES, schema=ALIAS_SCHEMA).to_pandas()
+
+
+def write_customers(lake: Lake, aliases: pd.DataFrame, customers: pd.DataFrame) -> None:
+    lake.replace_partition(Layer.SILVER, ALIASES, SNAPSHOT, [convert_to_arrow(aliases, ALIAS_SCHEMA)])
+    lake.replace_partition(Layer.SILVER, CUSTOMERS, SNAPSHOT, [convert_to_arrow(customers, CUSTOMER_SCHEMA)])
+
+
+def read_stored_month(
+    lake: Lake, accepted_dataset: str, rejected_dataset: str, month: str, schema: pa.Schema, rejected_schema: pa.Schema
+) -> pd.DataFrame:
+    partition = [build_month_partition(month)]
+    tables = [
+        lake.read_dataset(Layer.SILVER, accepted_dataset, partition, schema=schema).select(schema.names),
+        lake.read_dataset(Layer.SILVER, rejected_dataset, partition, schema=rejected_schema).select(schema.names),
+    ]
+    return pa.concat_tables(tables).to_pandas()
+
+
+def write_month(lake: Lake, month: str, result: MonthResult) -> None:
+    partition = build_month_partition(month)
+    outputs = (
+        (INVOICES, result.invoices, INVOICE_SCHEMA),
+        (LINES, result.lines, LINE_SCHEMA),
+        (REJECTED, result.rejected, REJECTED_SCHEMA),
+        (REJECTED_LINES, result.rejected_lines, LINE_SCHEMA),
+    )
+    for dataset, frame, schema in outputs:
+        lake.replace_partition(Layer.SILVER, dataset, partition, [convert_to_arrow(frame, schema)])
+
+
+def convert_to_arrow(frame: pd.DataFrame, schema: pa.Schema) -> pa.Table:
+    return pa.Table.from_pandas(frame[schema.names], schema=schema, preserve_index=False)
+
+
+def concatenate_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    non_empty = [frame for frame in frames if not frame.empty]
+    if not non_empty:
+        return frames[0]
+    return pd.concat(non_empty, ignore_index=True)

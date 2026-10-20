@@ -136,6 +136,6 @@ def load_bronze(
             unknown.update(find_unknown_fields(document))
         return to_table(documents, extracted_at)
 
-    target = Target(Layer.BRONZE, DATASET, partition)
+    target = Target(Layer.BRONZE, DATASET, partition, empty_schema=BRONZE_SCHEMA)
     rows = load_partition(lake, target, extract_batches(collection, window, batch_size), convert)
     return BronzeLoad(rows=rows, unknown_fields=sorted(unknown))

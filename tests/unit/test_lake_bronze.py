@@ -194,12 +194,16 @@ def test_load_bronze_rerun_leaves_one_copy_of_each_invoice(lake):
     assert lake.read_dataset(Layer.BRONZE, DATASET)["_id"].to_pylist() == ["S1", "S2"]
 
 
-def test_load_bronze_empty_window_writes_nothing(lake):
+# An hour without changes still leaves a schema-only file: silver's watermark needs to tell
+# "nothing changed" apart from "never extracted", and only the lake itself can say which.
+def test_load_bronze_empty_window_marks_the_hour_with_an_empty_file(lake):
     # Arrange / Act
     load = load_bronze(lake, Invoices([]), Window(since=START, until=END), "p", EXTRACTED)
 
     # Assert
-    assert (load.rows, lake.list_partitions(Layer.BRONZE, DATASET)) == (0, [])
+    assert (load.rows, lake.list_partitions(Layer.BRONZE, DATASET)) == (0, ["p"])
+    assert lake.read_part_schemas(Layer.BRONZE, DATASET) == [BRONZE_SCHEMA]
+    assert lake.read_dataset(Layer.BRONZE, DATASET).num_rows == 0
 
 
 def test_load_bronze_reports_unknown_fields_across_batches(lake):

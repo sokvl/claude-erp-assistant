@@ -96,6 +96,19 @@ def test_replace_partition_empty_chunks_leave_no_partition(lake):
     assert (rows, lake.list_partitions(Layer.BRONZE, "invoices")) == (0, [])
 
 
+def test_replace_partition_with_an_empty_schema_keeps_a_schema_only_file(lake):
+    # Arrange
+    lake.replace_partition(Layer.BRONZE, "invoices", "p1", [_table(0, 3)])
+
+    # Act
+    rows = lake.replace_partition(Layer.BRONZE, "invoices", "p1", [_table(0, 0)], empty_schema=SCHEMA)
+
+    # Assert
+    assert (rows, lake.list_partitions(Layer.BRONZE, "invoices")) == (0, ["p1"])
+    assert lake.read_part_schemas(Layer.BRONZE, "invoices") == [SCHEMA]
+    assert lake.read_dataset(Layer.BRONZE, "invoices").num_rows == 0
+
+
 def test_replace_partition_accepts_record_batches(lake):
     # Arrange
     batches = _table(0, 4).to_batches(max_chunksize=2)
