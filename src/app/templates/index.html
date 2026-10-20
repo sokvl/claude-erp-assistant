@@ -30,6 +30,9 @@
         <a class="nav-item" href="#/invoices" data-route="invoices">
           <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/></svg>Invoices
         </a>
+        <a class="nav-item" href="#/products" data-route="products">
+          <svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></svg>Products
+        </a>
         <a class="nav-item" href="#/audit" data-route="audit">
           <svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Audit
         </a>
@@ -92,6 +95,44 @@
                 <th>Cleared</th>
               </tr>
             </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="empty" hidden></p>
+        <div class="pager"></div>
+      </section>
+      <section class="view page" data-view="products" hidden>
+        <header><h1>Products</h1></header>
+        <form id="product-filters" class="filters" autocomplete="off">
+          <label>Category <select name="category"><option value="">Any</option></select></label>
+          <label>Brand <select name="brand"><option value="">Any</option></select></label>
+          <label>Architecture <select name="architecture"><option value="">Any</option></select></label>
+          <label>Memory <select name="memory_type"><option value="">Any</option></select></label>
+          <label>Min price <input type="number" name="min_price" step="any" class="short"></label>
+          <label>Max price <input type="number" name="max_price" step="any" class="short"></label>
+          <label>Sort by
+            <select name="sort_by">
+              <option value="name">Name</option>
+              <option value="price">Price</option>
+              <option value="vram">VRAM</option>
+              <option value="fp16">FP16 TFLOPS</option>
+              <option value="release_year">Release year</option>
+            </select>
+          </label>
+          <label>Order
+            <select name="sort_order">
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </label>
+          <fieldset class="use-cases"><legend>Use cases</legend></fieldset>
+          <button class="primary" type="submit">Apply</button>
+          <button class="clear" type="button">Clear</button>
+        </form>
+        <p class="problem" role="alert" hidden></p>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Name</th><th>Brand</th><th>Category</th><th class="num">List price</th><th>Key specs</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>

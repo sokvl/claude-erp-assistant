@@ -1,10 +1,12 @@
 import * as chat from "./chat.js";
 import * as audit from "./views/audit.js";
 import * as invoices from "./views/invoices.js";
+import * as products from "./views/products.js";
 
 const ROUTES = {
   chat: { roles: ["consultant", "manager"], view: chat },
   invoices: { roles: ["manager"], view: invoices },
+  products: { roles: ["consultant", "manager"], view: products },
   audit: { roles: ["admin"], view: audit },
 };
 

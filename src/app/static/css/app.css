@@ -121,6 +121,12 @@ header h1 {
 .data .num { text-align: right; font-variant-numeric: tabular-nums; }
 .data .muted { display: block; font-size: 12px; color: var(--muted); }
 .filters input.short { width: 120px; }
+.use-cases {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 4px 10px 6px;
+  border: 1px solid var(--border); border-radius: 10px; font-size: 13px;
+}
+.use-cases legend { padding: 0 4px; font-size: 12px; color: var(--muted); }
+.filters .use-cases label { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
 button.sort {
   padding: 0; font: inherit; color: inherit; background: none; border: 0; border-radius: 0;
   text-decoration: underline dotted; text-underline-offset: 3px;
