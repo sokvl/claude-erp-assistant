@@ -8,6 +8,10 @@ from lake.bronze import DATASET as BRONZE_DATASET
 from lake.bronze import to_table
 from lake.settings import LakeSettings, Layer
 from lake.silver import (
+    ALIAS_SCHEMA,
+    ALIASES,
+    CUSTOMER_SCHEMA,
+    CUSTOMERS,
     INVOICE_SCHEMA,
     INVOICES,
     LINES,
@@ -16,12 +20,16 @@ from lake.silver import (
     REJECTED_LINES,
     STATE,
     derive,
+    build_aliases,
+    choose_canonical,
     explode_lines,
+    find_common_prefix,
     find_pending,
     find_winning_months,
     flatten_invoices,
     keep_latest,
     keep_latest_lines,
+    merge_aliases,
     merge_silver,
     standardize,
     validate,
@@ -519,3 +527,162 @@ def test_merge_silver_invoice_without_lines_is_kept_and_flagged(lake):
     # Assert
     assert _read(lake, INVOICES)["quality_flags"].tolist() == [["lines_do_not_match_amount"]]
     assert lake.list_partitions(Layer.SILVER, LINES) == []
+
+
+def _customer(name, posted=POSTED, number="0100001196"):
+    return {"customer": {"number": number, "name": name, "nameLower": name.lower()}, "dates": {"postingDate": posted}}
+
+
+def _aliases(*rows):
+    return pd.DataFrame(
+        [(number, name, pd.Timestamp(seen, tz="UTC")) for number, name, seen in rows], columns=ALIAS_SCHEMA.names
+    )
+
+
+# Words, not characters: "GEOR corp" and "GEORGIA" are different companies, never "GEOR".
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        (["GEOR corp", "GEOR in"], "GEOR"),
+        (["CASC", "CASC corp", "CASC associates"], "CASC"),
+        (["SMART & co", "SMART & llc"], "SMART &"),
+        (["DOLLAR llc"], "DOLLAR llc"),
+        (["ACME Foods", "Globex Logistics"], ""),
+        (["GEOR corp", "GEORGIA"], ""),
+    ],
+    ids=["shared_first_word", "one_name_is_the_prefix", "two_shared_words", "single_name", "renamed_company", "partial_word"],
+)
+def test_find_common_prefix_keeps_the_words_every_name_shares(names, expected):
+    # Arrange / Act
+    prefix = find_common_prefix(names)
+
+    # Assert
+    assert prefix == expected
+
+
+# The newest name is decided by posting date: closing a three-year-old invoice today changes its
+# updatedAt, but the name on it is still the old one.
+@pytest.mark.parametrize(
+    ("aliases", "expected"),
+    [
+        (_aliases(("1", "GEOR corp", "2026-01-05"), ("1", "GEOR in", "2025-03-01")), "GEOR"),
+        (_aliases(("1", "ACME Foods", "2023-04-01"), ("1", "Globex Logistics", "2026-09-01")), "Globex Logistics"),
+        (_aliases(("1", "Globex Logistics", "2026-09-01"), ("1", "ACME Foods", "2023-04-01")), "Globex Logistics"),
+        (_aliases(("1", "ACME Foods", "2026-09-01"), ("1", "Globex Logistics", "2026-09-01")), "Globex Logistics"),
+    ],
+    ids=["prefix_wins", "empty_prefix_takes_newest_posting", "row_order_does_not_matter", "same_day_tie_is_alphabetical"],
+)
+def test_choose_canonical_takes_the_prefix_else_the_newest_name(aliases, expected):
+    # Arrange / Act
+    customers = choose_canonical(aliases)
+
+    # Assert
+    assert customers.to_dict("records") == [{"customer_number": "1", "canonical_name": expected, "alias_count": 2}]
+
+
+def test_build_aliases_keeps_the_latest_posting_per_name_and_skips_missing_customers():
+    # Arrange
+    invoices = standardize(flatten_invoices(_bronze(
+        _invoice("S1", **_customer("DOLLAR llc", datetime(2026, 8, 1))),
+        _invoice("S2", **_customer("DOLLAR  llc ", datetime(2026, 9, 1))),
+        _invoice("S3", customer={"number": None, "name": "NOBODY", "nameLower": "nobody"}),
+    )))
+
+    # Act
+    aliases = build_aliases(invoices)
+
+    # Assert
+    assert aliases.values.tolist() == [["0100001196", "DOLLAR llc", pd.Timestamp("2026-09-01", tz="UTC")]]
+
+
+# Union plus MAX: replays and reordering cannot change the aliases, unlike a running counter.
+@pytest.mark.parametrize(
+    ("stored", "new"),
+    [
+        (_aliases(("1", "GEOR in", "2026-01-05")), _aliases(("1", "GEOR in", "2026-01-05"), ("1", "GEOR corp", "2025-03-01"))),
+        (_aliases(("1", "GEOR in", "2026-01-05"), ("1", "GEOR corp", "2025-03-01")), _aliases(("1", "GEOR in", "2025-02-01"))),
+    ],
+    ids=["replayed_pair", "older_sighting_does_not_win"],
+)
+def test_merge_aliases_keeps_one_row_per_name_with_its_latest_sighting(stored, new):
+    # Arrange
+    expected = [["1", "GEOR corp", pd.Timestamp("2025-03-01", tz="UTC")], ["1", "GEOR in", pd.Timestamp("2026-01-05", tz="UTC")]]
+
+    # Act
+    forward, backward = merge_aliases(stored, new), merge_aliases(new, stored)
+
+    # Assert
+    assert forward.values.tolist() == expected
+    assert backward.values.tolist() == expected
+
+
+def test_merge_silver_names_from_several_months_give_one_customer(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00",
+          _invoice("S1", **_customer("DOLLAR llc", datetime(2026, 8, 1))),
+          _invoice("S2", **_customer("DOLLAR  corp", datetime(2026, 9, 1))))
+
+    # Act
+    run = merge_silver(lake)
+
+    # Assert
+    assert run.customers == 1
+    assert _read(lake, CUSTOMERS).to_dict("records") == [
+        {"customer_number": "0100001196", "canonical_name": "DOLLAR", "alias_count": 2}
+    ]
+
+
+# The customer table describes what the analyst sees, so a quarantined invoice adds no name.
+def test_merge_silver_rejected_invoice_adds_no_alias(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00",
+          _invoice("S1", **_customer("DOLLAR llc")),
+          _invoice("S2", amount=0.0, lines=[_line(1, 0.0)], **_customer("DOLLAR corp")))
+
+    # Act
+    merge_silver(lake)
+
+    # Assert
+    assert _read(lake, ALIASES)["name"].tolist() == ["DOLLAR llc"]
+    assert _read(lake, CUSTOMERS)["canonical_name"].tolist() == ["DOLLAR llc"]
+
+
+def test_merge_silver_later_run_adds_aliases_to_the_stored_ones(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1", **_customer("DOLLAR llc")))
+    merge_silver(lake)
+    _land(lake, "2026-10-19-06", _invoice("S2", **_customer("DOLLAR corp")), extracted_at=LATER)
+
+    # Act
+    merge_silver(lake)
+
+    # Assert
+    assert _read(lake, ALIASES)["name"].tolist() == ["DOLLAR corp", "DOLLAR llc"]
+    assert _read(lake, CUSTOMERS)["canonical_name"].tolist() == ["DOLLAR"]
+
+
+def test_merge_silver_replaying_bronze_gives_the_same_customers(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1", **_customer("DOLLAR llc")), _invoice("S2", **_customer("DOLLAR corp")))
+    merge_silver(lake)
+    before = (_read(lake, ALIASES), _read(lake, CUSTOMERS))
+    lake.write_pointer(Layer.SILVER, STATE, {PROCESSED: []})
+
+    # Act
+    merge_silver(lake)
+
+    # Assert
+    pd.testing.assert_frame_equal(_read(lake, ALIASES), before[0])
+    pd.testing.assert_frame_equal(_read(lake, CUSTOMERS), before[1])
+
+
+def test_merge_silver_writes_the_declared_customer_schemas(lake):
+    # Arrange
+    _land(lake, "2026-10-16-00", _invoice("S1"))
+
+    # Act
+    merge_silver(lake)
+
+    # Assert
+    assert lake.read_part_schemas(Layer.SILVER, ALIASES) == [ALIAS_SCHEMA]
+    assert lake.read_part_schemas(Layer.SILVER, CUSTOMERS) == [CUSTOMER_SCHEMA]

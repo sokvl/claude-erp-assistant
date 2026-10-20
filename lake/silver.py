@@ -1,3 +1,4 @@
+import os
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
@@ -50,6 +51,9 @@ REJECTED = "invoices_rejected"
 REJECTED_LINES = "invoice_lines_rejected"
 STATE = "_invoices_state.json"
 PROCESSED = "processed_bronze_partitions"
+ALIASES = "customer_aliases"
+CUSTOMERS = "customers"
+SNAPSHOT = "current"
 
 Rule = Callable[[pd.DataFrame], pd.Series]
 
@@ -87,6 +91,7 @@ class SilverRun:
     months: list[str]
     invoices: int
     rejected: int
+    customers: int
 
 
 def name_invoice_columns(bronze: pa.Table) -> pa.Table:
@@ -116,6 +121,8 @@ LINE_SCHEMA = pa.schema(
         ("posting_month", pa.string()),
     ]
 )
+ALIAS_SCHEMA = pa.schema([("customer_number", pa.string()), ("name", pa.string()), ("last_seen", TIMESTAMP)])
+CUSTOMER_SCHEMA = pa.schema([("customer_number", pa.string()), ("canonical_name", pa.string()), ("alias_count", pa.int64())])
 
 
 def flatten_invoices(bronze: pa.Table) -> pd.DataFrame:
@@ -235,7 +242,7 @@ def merge_silver(lake: Lake) -> SilverRun:
     processed = (lake.read_pointer(Layer.SILVER, STATE) or {}).get(PROCESSED, [])
     pending = find_pending(lake.list_partitions(Layer.BRONZE, BRONZE_DATASET), processed)
     if not pending:
-        return SilverRun(bronze_partitions=[], months=[], invoices=0, rejected=0)
+        return SilverRun(bronze_partitions=[], months=[], invoices=0, rejected=0, customers=0)
     bronze = lake.read_dataset(Layer.BRONZE, BRONZE_DATASET, pending, schema=BRONZE_SCHEMA)
     new_invoices = keep_latest(flatten_invoices(bronze))
     new_invoices["posting_month"] = name_month(new_invoices["posting_date"])
@@ -246,6 +253,7 @@ def merge_silver(lake: Lake) -> SilverRun:
     months = sorted(set(new_invoices["posting_month"].dropna()) | set(previous_locations["posting_month"]))
     new_invoices_by_month = dict(list(new_invoices.groupby("posting_month")))
     new_lines_by_month = dict(list(new_lines.groupby("posting_month")))
+    new_aliases = [ALIAS_SCHEMA.empty_table().to_pandas()]
     accepted_count = rejected_count = 0
     for month in months:
         result = merge_month(
@@ -257,10 +265,16 @@ def merge_silver(lake: Lake) -> SilverRun:
             winning_month_by_invoice,
         )
         write_month(lake, month, result)
+        new_aliases.append(build_aliases(result.invoices))
         accepted_count += len(result.invoices)
         rejected_count += len(result.rejected)
+    aliases = merge_aliases(read_stored_aliases(lake), concatenate_frames(new_aliases))
+    customers = choose_canonical(aliases)
+    write_customers(lake, aliases, customers)
     lake.write_pointer(Layer.SILVER, STATE, {PROCESSED: sorted({*processed, *pending})})
-    return SilverRun(bronze_partitions=pending, months=months, invoices=accepted_count, rejected=rejected_count)
+    return SilverRun(
+        bronze_partitions=pending, months=months, invoices=accepted_count, rejected=rejected_count, customers=len(customers)
+    )
 
 
 def read_stored_locations(lake: Lake) -> pd.DataFrame:
@@ -269,6 +283,43 @@ def read_stored_locations(lake: Lake) -> pd.DataFrame:
         for dataset, schema in ((INVOICES, INVOICE_SCHEMA), (REJECTED, REJECTED_SCHEMA))
     ]
     return pa.concat_tables(tables).to_pandas()
+
+
+def find_common_prefix(names: Iterable[str]) -> str:
+    return " ".join(os.path.commonprefix([name.split(" ") for name in names]))
+
+
+def build_aliases(invoices: pd.DataFrame) -> pd.DataFrame:
+    named = invoices.dropna(subset=["customer_number", "customer_name"])
+    latest = named.groupby(["customer_number", "customer_name"], as_index=False)["posting_date"].max()
+    return latest.rename(columns={"customer_name": "name", "posting_date": "last_seen"})[ALIAS_SCHEMA.names]
+
+
+def merge_aliases(stored: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    combined = concatenate_frames([stored[ALIAS_SCHEMA.names], new[ALIAS_SCHEMA.names]])
+    return combined.groupby(["customer_number", "name"], as_index=False)["last_seen"].max()
+
+
+def choose_canonical(aliases: pd.DataFrame) -> pd.DataFrame:
+    ordered = aliases.sort_values(["customer_number", "last_seen", "name"])
+    customers = [
+        {
+            "customer_number": number,
+            "canonical_name": find_common_prefix(names["name"]) or names["name"].iloc[-1],
+            "alias_count": len(names),
+        }
+        for number, names in ordered.groupby("customer_number")
+    ]
+    return pd.DataFrame(customers, columns=CUSTOMER_SCHEMA.names)
+
+
+def read_stored_aliases(lake: Lake) -> pd.DataFrame:
+    return lake.read_dataset(Layer.SILVER, ALIASES, schema=ALIAS_SCHEMA).to_pandas()
+
+
+def write_customers(lake: Lake, aliases: pd.DataFrame, customers: pd.DataFrame) -> None:
+    lake.replace_partition(Layer.SILVER, ALIASES, SNAPSHOT, [convert_to_arrow(aliases, ALIAS_SCHEMA)])
+    lake.replace_partition(Layer.SILVER, CUSTOMERS, SNAPSHOT, [convert_to_arrow(customers, CUSTOMER_SCHEMA)])
 
 
 def read_stored_month(
