@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.analytics.service import analyze_gold, get_gold_settings
 from app.assistant.tools import (
     ANALYZE_INVOICES,
     CHART_INVOICES,
@@ -24,7 +25,7 @@ from app.charts.storage import CHART_COLLECTION
 from app.invoices.events import INVOICE_EVENTS_COLLECTION
 from app.invoices.pending_actions import PENDING_ACTIONS_COLLECTION, PendingAction
 from app.invoices.schemas import InvoiceAnalyticsParams
-from app.invoices.service import analyze_invoices, list_invoices, request_close
+from app.invoices.service import list_invoices, request_close
 from app.utils.mongo import CollectionSource
 
 HIDDEN_PRODUCT_FIELDS = frozenset({"_id", "tier"})
@@ -84,10 +85,10 @@ def _dispatch(
     if name == LIST_INVOICES:
         return list_invoices(db["invoices"], ListInvoicesInput.model_validate(tool_input))
     if name == ANALYZE_INVOICES:
-        return analyze_invoices(db["invoices"], InvoiceAnalyticsParams.model_validate(tool_input))
+        return analyze_gold(get_gold_settings(), InvoiceAnalyticsParams.model_validate(tool_input))
     if name == CHART_INVOICES:
         return chart_analytics(
-            db["invoices"],
+            get_gold_settings(),
             db[CHART_COLLECTION],
             ChartParams.model_validate(tool_input),
             conversation_id,

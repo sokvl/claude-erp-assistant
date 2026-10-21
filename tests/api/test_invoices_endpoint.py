@@ -3,9 +3,11 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from app.analytics.service import get_gold_settings
 from app.auth.roles import Principal, Role
 from app.db import get_database
 from app.main import app
+from app.routers import invoices as invoices_router
 from app.security import current_principal
 
 MANAGER = Principal("anna", Role.MANAGER)
@@ -80,18 +82,46 @@ def test_list_invoices_returns_iso_dates(client):
     assert body["items"][0]["dates"]["postingDate"] == "2020-01-26T00:00:00"
 
 
-def test_invoice_analytics_returns_figures_per_currency_with_as_of_and_coverage(client):
+GOLD = object()
+
+
+@pytest.fixture
+def gold(monkeypatch):
+    # Arrange: the analytics endpoint answers from gold; record what it was asked
+    calls = []
+
+    def analyze(settings, params):
+        calls.append((settings, params))
+        return {"asOf": params.as_of.isoformat(), "dataAsOf": "2020-05-31T13:00:00+00:00", "currencies": ROWS}
+
+    monkeypatch.setattr(invoices_router, "analyze_gold", analyze)
+    app.dependency_overrides[get_gold_settings] = lambda: GOLD
+    yield calls
+    app.dependency_overrides.pop(get_gold_settings, None)
+
+
+def test_invoice_analytics_answers_from_gold_with_the_query_params(client, invoices, gold):
     # Arrange / Act
     body = client.get("/invoices/analytics?group_by=customer&limit=5&as_of=2020-05-31").json()
 
     # Assert
-    assert body == {
-        "asOf": "2020-05-31",
-        "groupBy": "customer",
-        "filters": {},
-        "coverage": {"firstPostingDate": "2019-01-02", "lastPostingDate": "2019-01-02"},
-        "currencies": ROWS,
-    }
+    [(settings, params)] = gold
+    assert (settings, params.group_by, params.limit, params.as_of.isoformat()) == (GOLD, "customer", 5, "2020-05-31")
+    assert body == {"asOf": "2020-05-31", "dataAsOf": "2020-05-31T13:00:00+00:00", "currencies": ROWS}
+    assert invoices.aggregate_calls == []
+
+
+# Without gold the endpoint says so with a 503, like an unreachable database, and never falls back
+# to MongoDB, whose figures would be of another freshness.
+def test_invoice_analytics_without_gold_is_service_unavailable(client, invoices):
+    # Arrange
+    app.dependency_overrides[get_gold_settings] = lambda: None
+
+    # Act
+    response = client.get("/invoices/analytics")
+
+    # Assert
+    assert (response.status_code, response.json(), invoices.aggregate_calls) == (503, {"detail": "Analytics unavailable"}, [])
 
 
 @pytest.mark.parametrize(

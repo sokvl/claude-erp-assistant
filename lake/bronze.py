@@ -9,7 +9,7 @@ from pymongo import ReadPreference
 from pymongo.read_concern import ReadConcern
 
 from lake.loading import Target, load_partition
-from lake.settings import Layer
+from lake_config.settings import Layer
 from lake.storage import DEFAULT_BATCH_ROWS, Lake
 
 DATASET = "invoices"

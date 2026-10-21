@@ -1,20 +1,11 @@
-import json
 from datetime import date, datetime
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
 from indexes import INVOICE_INDEXES, sync_indexes
 
-from app.assistant.dispatch import run_tool
-from app.auth.roles import Principal, Role
-from app.db import get_database
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceListParams
 from app.invoices.service import analyze_invoices, list_invoices
-from app.main import app
-from app.security import current_principal
-
-MANAGER = Principal("anna", Role.MANAGER)
 
 pytestmark = pytest.mark.integration
 
@@ -224,34 +215,3 @@ def test_list_invoices_filters_sorts_and_pages(invoices, kwargs, expected_ids, e
 
     # Assert
     assert ([item["invoiceId"] for item in result["items"]], result["total"]) == (expected_ids, expected_total)
-
-
-def test_run_tool_analyze_invoices_returns_the_controllers_figures(invoices):
-    # Arrange
-    tool_input = {"group_by": "customer", "posted_from": "2020-01-01", "as_of": "2020-05-31"}
-    direct = _analyze(invoices, group_by="customer", posted_from=date(2020, 1, 1))
-
-    # Act
-    result = json.loads(run_tool(invoices.database, "analyze_invoices", tool_input).content)
-
-    # Assert
-    assert result == json.loads(json.dumps(direct))
-
-
-@pytest.fixture
-def client(invoices):
-    app.dependency_overrides[get_database] = lambda: invoices.database
-    app.dependency_overrides[current_principal] = lambda: MANAGER
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-def test_invoice_analytics_endpoint_returns_the_controllers_figures(invoices, client):
-    # Arrange
-    direct = _analyze(invoices, group_by="category")
-
-    # Act
-    body = client.get("/invoices/analytics?group_by=category&as_of=2020-05-31").json()
-
-    # Assert
-    assert body == json.loads(json.dumps(direct))

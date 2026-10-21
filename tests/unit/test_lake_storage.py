@@ -3,7 +3,7 @@ from uuid import uuid4
 import pyarrow as pa
 import pytest
 
-from lake.settings import LakeSettings, Layer
+from lake_config.settings import LakeSettings, Layer
 from lake.storage import Lake, build_storage_options
 
 SCHEMA = pa.schema([("id", pa.int64()), ("name", pa.string())])
@@ -202,3 +202,38 @@ def test_read_part_schemas_returns_one_schema_per_part_file(lake):
 
     # Assert
     assert [schema.equals(SCHEMA) for schema in schemas] == [True, True]
+
+
+def test_read_files_reads_the_listed_files_relative_to_the_layer(lake):
+    # Arrange
+    lake.replace_partition(Layer.GOLD, "dim", "v=1", [_table(0, 2)])
+    lake.replace_partition(Layer.GOLD, "dim", "v=2", [_table(10, 3)])
+    files = [lake.to_relative(Layer.GOLD, file) for file in lake.list_part_files(Layer.GOLD, "dim", ["v=2"])]
+
+    # Act
+    table = lake.read_files(Layer.GOLD, files, SCHEMA)
+
+    # Assert
+    assert files == ["dim/v=2/part-00000.parquet"]
+    assert table["id"].to_pylist() == [10, 11, 12]
+
+
+def test_read_files_without_files_returns_an_empty_table_with_the_schema(lake):
+    # Arrange / Act
+    table = lake.read_files(Layer.GOLD, [], SCHEMA)
+
+    # Assert
+    assert (table.num_rows, table.schema) == (0, SCHEMA)
+
+
+def test_delete_partition_removes_only_that_partition_and_ignores_a_missing_one(lake):
+    # Arrange
+    lake.replace_partition(Layer.GOLD, "dim", "v=1", [_table(0, 1)])
+    lake.replace_partition(Layer.GOLD, "dim", "v=2", [_table(0, 1)])
+
+    # Act
+    lake.delete_partition(Layer.GOLD, "dim", "v=1")
+    lake.delete_partition(Layer.GOLD, "dim", "v=9")
+
+    # Assert
+    assert lake.list_partitions(Layer.GOLD, "dim") == ["v=2"]

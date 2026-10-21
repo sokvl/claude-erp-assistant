@@ -8,7 +8,7 @@ import pyarrow.compute as pc
 
 from lake.bronze import BRONZE_SCHEMA, LINE, TIMESTAMP
 from lake.bronze import DATASET as BRONZE_DATASET
-from lake.settings import Layer
+from lake_config.settings import Layer
 from lake.storage import Lake
 
 INVOICE_COLUMNS = {

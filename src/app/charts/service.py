@@ -1,24 +1,25 @@
 from typing import Any
 
+from app.analytics.service import analyze_gold
 from app.charts.enums import METRIC_LABELS, ChartType
 from app.charts.render import render_chart
 from app.charts.schemas import ChartParams
 from app.charts.storage import save_chart
 from app.invoices.schemas import InvoiceAnalyticsParams
-from app.invoices.service import analyze_invoices
+from lake_config.settings import LakeSettings
 
 DRAWING_FIELDS = {"chart_type", "metric"}
 
 
 def chart_analytics(
-    invoices: Any,
+    gold: LakeSettings | None,
     charts: Any,
     params: ChartParams,
     conversation_id: str | None = None,
     username: str | None = None,
 ) -> dict[str, Any]:
     figures = InvoiceAnalyticsParams.model_validate(params.model_dump(exclude=DRAWING_FIELDS))
-    result = analyze_invoices(invoices, figures)
+    result = analyze_gold(gold, figures)
     title = _title(params)
     image = render_chart(
         currencies=result["currencies"],

@@ -18,7 +18,7 @@ from lake.bronze import (
     name_partition,
     to_table,
 )
-from lake.settings import LakeSettings, Layer
+from lake_config.settings import LakeSettings, Layer
 from lake.storage import Lake
 
 START = datetime(2026, 10, 16, 14, tzinfo=UTC)

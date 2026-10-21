@@ -9,7 +9,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["src/app", "lake"]
+source = ["src/app", "src/lake_config", "lake"]
 branch = true
 omit = ["*/__init__.py", "lake/definitions.py"]
 

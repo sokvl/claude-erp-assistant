@@ -17,7 +17,7 @@ from lake.reconciliation import (
     reconcile,
     summarize_silver,
 )
-from lake.settings import LakeSettings, Layer
+from lake_config.settings import LakeSettings, Layer
 from lake.silver import PROCESSED, STATE
 from lake.storage import Lake
 

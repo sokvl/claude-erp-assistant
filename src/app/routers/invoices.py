@@ -3,11 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from pymongo.database import Database
 
+from app.analytics.service import analyze_gold, get_gold_settings
 from app.auth.roles import Role
 from app.db import get_database
 from app.invoices.schemas import InvoiceAnalyticsParams, InvoiceListParams
-from app.invoices.service import analyze_invoices, list_invoices
+from app.invoices.service import list_invoices
 from app.security import require_role
+from lake_config.settings import LakeSettings
 
 router = APIRouter(prefix="/invoices", tags=["invoices"], dependencies=[Depends(require_role(Role.MANAGER))])
 
@@ -23,6 +25,6 @@ def list_invoice_records(
 @router.get("/analytics")
 def invoice_analytics(
     params: Annotated[InvoiceAnalyticsParams, Query()],
-    db: Database = Depends(get_database),
+    gold: LakeSettings | None = Depends(get_gold_settings),
 ):
-    return analyze_invoices(db["invoices"], params)
+    return analyze_gold(gold, params)

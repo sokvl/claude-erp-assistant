@@ -4,7 +4,7 @@ from uuid import uuid4
 import pyarrow as pa
 import pytest
 
-from lake.settings import LakeConfigError, Layer, Role, load_settings
+from lake_config.settings import LakeConfigError, Layer, Role, load_settings
 from lake.storage import Lake, open_location
 
 pytestmark = pytest.mark.lake

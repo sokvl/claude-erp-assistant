@@ -1,8 +1,7 @@
-from datetime import datetime
-
 import pytest
 
 from app.charts.schemas import ChartParams
+from app.charts import service
 from app.charts.service import chart_analytics
 
 ROWS = [
@@ -19,15 +18,24 @@ ROWS = [
 ]
 
 
-class FakeInvoices:
-    def __init__(self, currencies):
-        self.currencies = currencies
+@pytest.fixture
+def analytics(monkeypatch):
+    # Arrange: analytics answered from fixed rows, the way gold would; returns the gold settings
+    def answer_with(currencies):
+        def analyze(gold, params):
+            return {
+                "asOf": "2019-12-31",
+                "dataAsOf": "2019-12-31T00:00:00+00:00",
+                "groupBy": params.group_by,
+                "filters": params.model_dump(mode="json", exclude_none=True, exclude={"as_of", "group_by", "limit"}),
+                "coverage": {"firstPostingDate": "2019-01-02", "lastPostingDate": "2019-01-02"},
+                "currencies": currencies,
+            }
 
-    def aggregate(self, pipeline, **kwargs):
-        return iter(self.currencies)
+        monkeypatch.setattr(service, "analyze_gold", analyze)
+        return None
 
-    def find_one(self, *args, **kwargs):
-        return {"dates": {"postingDate": datetime(2019, 1, 2)}}
+    return answer_with
 
 
 class FakeCharts:
@@ -42,14 +50,14 @@ def _params(**overrides):
     return ChartParams.model_validate({"chart_type": "line", "group_by": "month"} | overrides)
 
 
-# The chart is rendered from what the aggregation returned, and the rows travel back
+# The chart is rendered from what the analytics returned, and the rows travel back
 # unchanged so the answer quotes database figures rather than anything read off a picture.
-def test_chartAnalytics_matchingInvoices_returnsTheRowsAndAStoredChart():
+def test_chartAnalytics_matchingInvoices_returnsTheRowsAndAStoredChart(analytics):
     # Arrange
     charts = FakeCharts()
 
     # Act
-    result = chart_analytics(FakeInvoices(ROWS), charts, _params(), "conv-1")
+    result = chart_analytics(analytics(ROWS), charts, _params(), "conv-1")
 
     # Assert
     [stored] = charts.documents
@@ -59,25 +67,25 @@ def test_chartAnalytics_matchingInvoices_returnsTheRowsAndAStoredChart():
     assert bytes(stored["image"]).startswith(b"\x89PNG")
 
 
-# analyze_invoices echoes back the filters it applied and the analyst states them,
+# The analytics echo back the filters they applied and the analyst states them,
 # so the drawing options must not travel with them and be read out as filters.
-def test_chartAnalytics_always_echoesOnlyTheInvoiceFilters():
+def test_chartAnalytics_always_echoesOnlyTheInvoiceFilters(analytics):
     # Arrange
     params = _params(posted_from="2019-01-01", posted_to="2019-12-31", currency="USD", metric="open")
 
     # Act
-    result = chart_analytics(FakeInvoices(ROWS), FakeCharts(), params, "conv-1")
+    result = chart_analytics(analytics(ROWS), FakeCharts(), params, "conv-1")
 
     # Assert
     assert result["filters"] == {"posted_from": "2019-01-01", "posted_to": "2019-12-31", "currency": "USD"}
 
 
-def test_chartAnalytics_noMatchingInvoices_returnsNoChartIdAndStoresNothing():
+def test_chartAnalytics_noMatchingInvoices_returnsNoChartIdAndStoresNothing(analytics):
     # Arrange
     charts = FakeCharts()
 
     # Act
-    result = chart_analytics(FakeInvoices([]), charts, _params(), "conv-1")
+    result = chart_analytics(analytics([]), charts, _params(), "conv-1")
 
     # Assert
     assert (result["chartId"], charts.documents) == (None, [])
@@ -97,9 +105,9 @@ def test_chartAnalytics_noMatchingInvoices_returnsNoChartIdAndStoresNothing():
     ],
     ids=["default", "other_metric", "stacked_grouped", "stacked_totals", "both_dates", "open_ended"],
 )
-def test_chartAnalytics_params_titleNamesTheMetricGroupingAndPeriod(overrides, expected):
+def test_chartAnalytics_params_titleNamesTheMetricGroupingAndPeriod(analytics, overrides, expected):
     # Arrange / Act
-    result = chart_analytics(FakeInvoices(ROWS), FakeCharts(), _params(**overrides), "conv-1")
+    result = chart_analytics(analytics(ROWS), FakeCharts(), _params(**overrides), "conv-1")
 
     # Assert
     assert result["chartTitle"] == expected

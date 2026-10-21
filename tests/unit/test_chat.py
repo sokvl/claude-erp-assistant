@@ -9,8 +9,10 @@ import pytest
 from anthropic.types import Message
 from pymongo.errors import ServerSelectionTimeoutError
 
+from app.analytics.gold import GoldUnavailable
 from app.assistant import chat
 from app.assistant.chat import (
+    ERROR_MESSAGES,
     MAX_MODEL_CALLS,
     TOOL_FAILURE_MESSAGE,
     Answer,
@@ -362,6 +364,22 @@ def test_run_turn_database_error_in_tool_stops_without_another_model_call(monkey
 
     # Assert
     assert (raised.value.code, len(client.requests)) == ("database_unavailable", 1)
+
+
+# Unreadable gold stops the turn with its own message; the model never gets to guess figures,
+# and nothing falls back to MongoDB, whose figures would be of another freshness.
+def test_run_turn_gold_unavailable_in_tool_stops_without_another_model_call(monkeypatch):
+    # Arrange
+    _fail_tool(monkeypatch, GoldUnavailable("cannot read gold: connection refused"))
+    client = FakeClient(_tool_round(), _answer())
+
+    # Act
+    with pytest.raises(ChatError) as raised:
+        _run(client)
+
+    # Assert
+    assert (raised.value.code, len(client.requests)) == ("analytics_unavailable", 1)
+    assert raised.value.message == ERROR_MESSAGES["analytics_unavailable"]
 
 
 @pytest.mark.parametrize(
