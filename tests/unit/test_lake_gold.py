@@ -8,6 +8,7 @@ import pytest
 from lake.bronze import DATASET as BRONZE_DATASET
 from lake.bronze import to_table
 from lake.gold import (
+    SilverInput,
     DIM_DATE_SCHEMA,
     DIM_PRODUCT_SCHEMA,
     FACT_INVOICE_LINE_SCHEMA,
@@ -17,12 +18,17 @@ from lake.gold import (
     build_dim_product,
     build_fact_invoice,
     build_fact_invoice_line,
+    build_gold,
     build_pointer,
+    compare_with_silver,
+    count_duplicate_keys,
+    count_missing_keys,
     find_unreferenced_versions,
     materialize_gold,
     name_version,
     read_current,
     read_gold_table,
+    read_published_tables,
     split_by_month,
     to_date_key,
 )
@@ -360,3 +366,112 @@ def test_materialize_gold_crash_before_the_pointer_keeps_the_previous_version(si
     assert pointer["version"] == first.version
     assert read_gold_table(crashing, pointer, "fact_invoice").num_rows == 3
     assert f"fact_invoice/{orphan}" in later.removed
+
+
+
+def _clean_silver():
+    invoices = _invoices(_invoice("S1", amount=30.0, paid="2026-09-10"), _invoice("S2", amount=54273.28, currency="CAD"))
+    lines = _lines(
+        {"invoice_id": "S1", "line_no": 1, "line_total": 10.0},
+        {"invoice_id": "S1", "line_no": 2, "line_total": 20.0, "sku": "SRV-DELL-R660"},
+        {"invoice_id": "S2", "line_no": 1, "line_total": 54273.28},
+    )
+    customers = pd.DataFrame({"customer_number": ["0100001196"], "canonical_name": ["DOLLAR"], "alias_count": [11]})
+    return SilverInput(invoices=invoices, lines=lines, customers=customers)
+
+
+def _gold(silver):
+    return build_gold(silver.invoices, silver.lines, silver.customers)
+
+
+def test_gold_checks_on_a_clean_build_find_nothing():
+    # Arrange
+    silver = _clean_silver()
+
+    # Act
+    tables = _gold(silver)
+
+    # Assert
+    assert (count_duplicate_keys(tables), count_missing_keys(tables)) == ({}, {})
+    assert compare_with_silver(silver, tables).empty
+
+
+# Fan-out: a duplicated dimension row or fact row multiplies the rows joined to it. The key check
+# names the cause, the totals check shows the damage.
+@pytest.mark.parametrize(
+    ("table", "expected"),
+    [("dim_product", {"dim_product": 1}), ("fact_invoice_line", {"fact_invoice_line": 1}), ("fact_invoice", {"fact_invoice": 1})],
+    ids=["product_twice", "line_twice", "invoice_twice"],
+)
+def test_count_duplicate_keys_names_the_table_with_a_repeated_key(table, expected):
+    # Arrange
+    tables = _gold(_clean_silver())
+    tables[table] = pd.concat([tables[table], tables[table].iloc[:1]], ignore_index=True)
+
+    # Act
+    duplicates = count_duplicate_keys(tables)
+
+    # Assert
+    assert duplicates == expected
+
+
+def test_count_missing_keys_names_each_broken_relation():
+    # Arrange
+    tables = _gold(_clean_silver())
+    tables["dim_product"] = tables["dim_product"][tables["dim_product"]["sku"] != "SRV-DELL-R660"]
+    tables["dim_date"] = tables["dim_date"][tables["dim_date"]["date_key"] != 20260910]
+
+    # Act
+    missing = count_missing_keys(tables)
+
+    # Assert
+    assert missing == {
+        "fact_invoice.payment_date_key -> dim_date.date_key": 1,
+        "fact_invoice_line.payment_date_key -> dim_date.date_key": 2,
+        "fact_invoice_line.sku -> dim_product.sku": 1,
+    }
+
+
+def _fan_out_lines(tables):
+    tables["fact_invoice_line"] = pd.concat([tables["fact_invoice_line"]] * 2, ignore_index=True)
+
+
+def _lose_first_invoice(tables):
+    tables["fact_invoice"] = tables["fact_invoice"].iloc[1:]
+
+
+def _add_a_cent(tables):
+    tables["fact_invoice"] = tables["fact_invoice"].assign(amount=tables["fact_invoice"]["amount"] + 0.01)
+
+
+@pytest.mark.parametrize(
+    ("damage", "expected"),
+    [
+        (_fan_out_lines, [("fact_invoice_line", "CAD"), ("fact_invoice_line", "USD")]),
+        (_lose_first_invoice, [("fact_invoice", "USD")]),
+        (_add_a_cent, [("fact_invoice", "CAD"), ("fact_invoice", "USD")]),
+    ],
+    ids=["lines_fanned_out", "invoice_lost", "one_cent_off"],
+)
+def test_compare_with_silver_reports_tables_and_currencies_that_differ(damage, expected):
+    # Arrange
+    silver = _clean_silver()
+    tables = _gold(silver)
+    damage(tables)
+
+    # Act
+    differences = compare_with_silver(silver, tables)
+
+    # Assert
+    assert sorted(zip(differences["table"], differences["currency"])) == sorted(expected)
+
+
+def test_read_published_tables_reads_back_what_was_published(silver):
+    # Arrange
+    materialize_gold(silver, RUN)
+
+    # Act
+    tables = read_published_tables(silver, read_current(silver))
+
+    # Assert
+    assert {name: len(frame) for name, frame in tables.items()} == read_current(silver)["rows"]

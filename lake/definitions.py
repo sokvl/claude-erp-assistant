@@ -7,6 +7,16 @@ import pyarrow as pa
 from pymongo import MongoClient
 
 from lake.bronze import BRONZE_SCHEMA, DATASET, BronzeLoad, build_window, count_window, load_bronze, name_partition
+from lake.gold import (
+    build_gold,
+    compare_with_silver,
+    count_duplicate_keys,
+    count_missing_keys,
+    publish_gold,
+    read_current,
+    read_published_tables,
+    read_silver_input,
+)
 from lake.reconciliation import Reconciliation, reconcile
 from lake.settings import Layer, Role, load_settings
 from lake.silver import (
@@ -34,6 +44,9 @@ NO_FUTURE_POSTINGS = "no_future_postings"
 SILVER_SCHEMAS = "matches_silver_schemas"
 RECONCILED = "matches_mongo_per_month"
 QUALITY_FLAGS = "few_quality_flags"
+GOLD_UNIQUE_KEYS = "unique_keys"
+GOLD_FOREIGN_KEYS = "foreign_keys_resolve"
+GOLD_MATCHES_SILVER = "matches_silver_totals"
 
 
 class LakeResource(dg.ConfigurableResource):
@@ -176,7 +189,45 @@ def silver_invoices(lake: LakeResource, mongo: MongoSource) -> dg.MaterializeRes
     )
 
 
+def evaluate_gold_checks(
+    duplicates: dict[str, int], missing: dict[str, int], differences: pd.DataFrame
+) -> list[dg.AssetCheckResult]:
+    return [
+        dg.AssetCheckResult(check_name=GOLD_UNIQUE_KEYS, passed=not duplicates, metadata={"duplicates": dg.MetadataValue.json(duplicates)}),
+        dg.AssetCheckResult(check_name=GOLD_FOREIGN_KEYS, passed=not missing, metadata={"missing": dg.MetadataValue.json(missing)}),
+        dg.AssetCheckResult(
+            check_name=GOLD_MATCHES_SILVER,
+            passed=differences.empty,
+            metadata={"differences": dg.MetadataValue.md(differences.to_markdown(index=False)) if not differences.empty else "none"},
+        ),
+    ]
+
+
+@dg.asset(
+    deps=[silver_invoices],
+    group_name="gold",
+    kinds={"pandas", "parquet"},
+    description="Star schema rebuilt from silver on every run and published behind gold/_current.json; the last three versions are kept.",
+    check_specs=[
+        dg.AssetCheckSpec(GOLD_UNIQUE_KEYS, asset="gold_invoices", description="No table repeats its key, so no join can fan out."),
+        dg.AssetCheckSpec(GOLD_FOREIGN_KEYS, asset="gold_invoices", description="Every fact key has a row in its dimension."),
+        dg.AssetCheckSpec(GOLD_MATCHES_SILVER, asset="gold_invoices", description="Invoices and lines per currency, count and cents, equal the accepted silver they were built from."),
+    ],
+)
+def gold_invoices(lake: LakeResource) -> dg.MaterializeResult:
+    store = lake.open()
+    silver = read_silver_input(store)
+    run = publish_gold(store, build_gold(silver.invoices, silver.lines, silver.customers), datetime.now(UTC))
+    published = read_published_tables(store, read_current(store))
+    return dg.MaterializeResult(
+        metadata={"version": run.version, "rows": dg.MetadataValue.json(run.rows), "removed_versions": len(run.removed)},
+        check_results=evaluate_gold_checks(
+            count_duplicate_keys(published), count_missing_keys(published), compare_with_silver(silver, published)
+        ),
+    )
+
+
 defs = dg.Definitions(
-    assets=[bronze_invoices, silver_invoices],
+    assets=[bronze_invoices, silver_invoices, gold_invoices],
     resources={"lake": LakeResource(), "mongo": MongoSource(uri=dg.EnvVar("LAKE_MONGO_URI"))},
 )

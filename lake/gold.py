@@ -128,6 +128,27 @@ KEEP_VERSIONS = 3
 WHOLE_TABLE = "all"
 
 
+PRIMARY_KEYS: Mapping[str, list[str]] = {
+    "dim_date": ["date_key"],
+    "dim_customer": ["customer_number"],
+    "dim_product": ["sku"],
+    "fact_invoice": ["invoice_id"],
+    "fact_invoice_line": ["invoice_id", "line_no"],
+}
+FOREIGN_KEYS = [
+    *[(fact, "customer_number", "dim_customer", "customer_number") for fact in FACT_TABLES],
+    *[(fact, key, "dim_date", "date_key") for fact in FACT_TABLES for key in DATE_KEYS],
+    ("fact_invoice_line", "sku", "dim_product", "sku"),
+]
+
+
+@dataclass(frozen=True)
+class SilverInput:
+    invoices: pd.DataFrame
+    lines: pd.DataFrame
+    customers: pd.DataFrame
+
+
 @dataclass(frozen=True)
 class GoldRun:
     version: str
@@ -188,11 +209,15 @@ def read_gold_table(lake: Lake, pointer: Mapping[str, Any], name: str) -> pa.Tab
     return lake.read_files(Layer.GOLD, pointer["tables"][name], TABLE_SCHEMAS[name])
 
 
-def materialize_gold(lake: Lake, now: datetime) -> GoldRun:
-    invoices = lake.read_dataset(Layer.SILVER, INVOICES, schema=INVOICE_SCHEMA).to_pandas()
-    lines = lake.read_dataset(Layer.SILVER, LINES, schema=LINE_SCHEMA).to_pandas()
-    customers = lake.read_dataset(Layer.SILVER, CUSTOMERS, schema=CUSTOMER_SCHEMA).to_pandas()
-    tables = build_gold(invoices, lines, customers)
+def read_silver_input(lake: Lake) -> SilverInput:
+    return SilverInput(
+        invoices=lake.read_dataset(Layer.SILVER, INVOICES, schema=INVOICE_SCHEMA).to_pandas(),
+        lines=lake.read_dataset(Layer.SILVER, LINES, schema=LINE_SCHEMA).to_pandas(),
+        customers=lake.read_dataset(Layer.SILVER, CUSTOMERS, schema=CUSTOMER_SCHEMA).to_pandas(),
+    )
+
+
+def publish_gold(lake: Lake, tables: Mapping[str, pd.DataFrame], now: datetime) -> GoldRun:
     version = name_version(now)
     files = write_version(lake, tables, version)
     rows = {name: len(frame) for name, frame in tables.items()}
@@ -203,3 +228,49 @@ def materialize_gold(lake: Lake, now: datetime) -> GoldRun:
     for name, old in removed:
         lake.delete_partition(Layer.GOLD, name, old)
     return GoldRun(version=version, rows=rows, removed=[f"{name}/{old}" for name, old in removed])
+
+
+def materialize_gold(lake: Lake, now: datetime) -> GoldRun:
+    silver = read_silver_input(lake)
+    return publish_gold(lake, build_gold(silver.invoices, silver.lines, silver.customers), now)
+
+
+def read_published_tables(lake: Lake, pointer: Mapping[str, Any]) -> dict[str, pd.DataFrame]:
+    return {name: read_gold_table(lake, pointer, name).to_pandas() for name in TABLE_SCHEMAS}
+
+
+def count_duplicate_keys(tables: Mapping[str, pd.DataFrame]) -> dict[str, int]:
+    counts = {name: int(tables[name].duplicated(keys).sum()) for name, keys in PRIMARY_KEYS.items()}
+    return {name: count for name, count in counts.items() if count}
+
+
+def count_missing_keys(tables: Mapping[str, pd.DataFrame]) -> dict[str, int]:
+    missing = {}
+    for fact, column, dimension, key in FOREIGN_KEYS:
+        values = tables[fact][column].dropna()
+        count = int((~values.isin(tables[dimension][key])).sum())
+        if count:
+            missing[f"{fact}.{column} -> {dimension}.{key}"] = count
+    return missing
+
+
+def summarize_money(currencies: pd.Series, amounts: pd.Series) -> pd.DataFrame:
+    cents = (amounts.fillna(0) * 100).round().astype("int64")
+    frame = pd.DataFrame({"currency": currencies, "rows": 1, "cents": cents})
+    return frame.groupby("currency", as_index=False)[["rows", "cents"]].sum()
+
+
+def compare_with_silver(silver: SilverInput, tables: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+    line_currency = silver.lines["invoice_id"].map(silver.invoices.set_index("invoice_id")["currency"])
+    pairs = [
+        ("fact_invoice", summarize_money(silver.invoices["currency"], silver.invoices["amount"]),
+         summarize_money(tables["fact_invoice"]["currency"], tables["fact_invoice"]["amount"])),
+        ("fact_invoice_line", summarize_money(line_currency, silver.lines["line_total"]),
+         summarize_money(tables["fact_invoice_line"]["currency"], tables["fact_invoice_line"]["line_total"])),
+    ]
+    compared = []
+    for table, expected, built in pairs:
+        both = expected.merge(built, on="currency", how="outer", suffixes=("_silver", "_gold")).fillna(0)
+        differs = (both["rows_silver"] != both["rows_gold"]) | (both["cents_silver"] != both["cents_gold"])
+        compared.append(both[differs].assign(table=table))
+    return pd.concat(compared, ignore_index=True)[["table", "currency", "rows_silver", "rows_gold", "cents_silver", "cents_gold"]]
