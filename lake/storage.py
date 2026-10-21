@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 from fsspec import AbstractFileSystem
 from fsspec.core import url_to_fs
 
-from lake.settings import LakeSettings, Layer
+from lake_config.settings import LakeSettings, Layer
 
 PART_FILE = "part-{:05d}.parquet"
 DEFAULT_BATCH_ROWS = 50_000

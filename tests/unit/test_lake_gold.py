@@ -33,7 +33,7 @@ from lake.gold import (
     split_by_month,
     to_date_key,
 )
-from lake.settings import LakeSettings, Layer
+from lake_config.settings import LakeSettings, Layer
 from lake.silver import merge_silver
 from lake.storage import Lake
 

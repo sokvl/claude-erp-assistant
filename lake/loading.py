@@ -4,7 +4,7 @@ from typing import TypeVar
 
 import pyarrow as pa
 
-from lake.settings import Layer
+from lake_config.settings import Layer
 from lake.storage import Lake
 
 Batch = TypeVar("Batch")

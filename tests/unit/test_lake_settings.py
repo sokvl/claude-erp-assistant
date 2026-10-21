@@ -1,6 +1,6 @@
 import pytest
 
-from lake.settings import LakeConfigError, Layer, Role, load_settings
+from lake_config.settings import LakeConfigError, Layer, Role, load_settings
 
 URIS = {
     "LAKE_BRONZE_URI": "s3://lake-bronze",

@@ -18,7 +18,7 @@ from lake.gold import (
     read_silver_input,
 )
 from lake.reconciliation import Reconciliation, find_watermark, reconcile
-from lake.settings import Layer, Role, load_settings
+from lake_config.settings import Layer, Role, load_settings
 from lake.silver import (
     SilverRun,
     concatenate_frames,

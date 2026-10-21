@@ -4,7 +4,7 @@ import pyarrow as pa
 import pytest
 
 from lake.loading import Target, load_partition
-from lake.settings import LakeSettings, Layer
+from lake_config.settings import LakeSettings, Layer
 from lake.storage import Lake
 
 TARGET = Target(Layer.SILVER, "invoices", "posting_month=2026-10")

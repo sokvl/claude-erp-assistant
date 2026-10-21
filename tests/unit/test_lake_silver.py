@@ -8,7 +8,7 @@ import pytest
 from lake.bronze import BRONZE_SCHEMA
 from lake.bronze import DATASET as BRONZE_DATASET
 from lake.bronze import to_table
-from lake.settings import LakeSettings, Layer
+from lake_config.settings import LakeSettings, Layer
 from lake.silver import (
     ALIAS_SCHEMA,
     ALIASES,

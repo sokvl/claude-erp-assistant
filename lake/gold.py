@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 import pyarrow as pa
 
-from lake.settings import Layer
+from lake_config.settings import Layer
 from lake.silver import (
     ALIAS_SCHEMA,
     ALIASES,

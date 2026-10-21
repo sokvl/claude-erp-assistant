@@ -3,7 +3,7 @@ from uuid import uuid4
 import pyarrow as pa
 import pytest
 
-from lake.settings import LakeSettings, Layer
+from lake_config.settings import LakeSettings, Layer
 from lake.storage import Lake, build_storage_options
 
 SCHEMA = pa.schema([("id", pa.int64()), ("name", pa.string())])
