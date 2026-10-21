@@ -142,7 +142,7 @@ CASES = (
     ),
     ask(
         "invoices_page",
-        "Show me the first 5 invoices.",
+        "Show me the 5 most recent invoices.",
         tools=("list_invoices",),
         gold=Gold({"page": 1, "page_size": 5}, tool="list_invoices", answer=None),
         assistant="analyst",

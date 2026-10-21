@@ -55,7 +55,7 @@ Search the hardware distributor's product catalog: GPUs, CPUs, RAM, storage, mot
 Use this for any question about which products exist, what they cost, how they compare, or which hardware fits a workload. Answer product questions from its results, never from memory. All filters are optional and combine with AND.
 
 Map requests to filters:
-- A product type ("GPUs", "CPUs", "monitors") -> category. A brand alone spans every category, so "AMD GPUs" needs brand="AMD" and category="GPU".
+- A product type ("GPUs", "CPUs", "monitors") -> category, also when a brand comes with it. A brand alone spans every category: "AMD GPUs" is brand="AMD" plus category="GPU", "Dell laptops" is brand="Dell" plus category="Laptop".
 - Memory needs ("at least 24 GB", "run a 13B model") -> min_vram_gb.
 - Training, fine-tuning or inference workloads -> use_case, plus min_vram_gb for the model size.
 - Budget ("under $2,000") -> max_price.
@@ -65,7 +65,7 @@ Map requests to filters:
 
 Do not:
 - Guess values outside the listed enums; pick the matching value or omit the filter.
-- Add category="GPU" when a GPU-only filter or sort is already set; those already restrict results to GPUs.
+- Add category="GPU" when a GPU-only filter or sort is already set: architecture, memory_type, use_case, a VRAM or FP16 bound, requires_pooling, or sort_by vram, fp16 or release_year. Those already restrict results to GPUs. A brand or a price is not GPU-only.
 - Use this for invoices, customers, payments or stock levels; the catalog has none of that.
 - Page through the catalog; narrow the filters instead.
 
@@ -148,7 +148,11 @@ def _search_properties() -> dict[str, Any]:
         "brand": {
             "type": "string",
             "enum": [member.value for member in Brand],
-            "description": "Manufacturer, exact spelling from the list. If the user names a brand that is not listed, the catalog does not carry it: say so instead of searching.",
+            "description": (
+                "Manufacturer, exact spelling from the list. A brand spans every category, so set category too "
+                "when the user names a product type. If the user names a brand that is not listed, the catalog "
+                "does not carry it: say so instead of searching."
+            ),
         },
         "architecture": {
             "type": "string",
