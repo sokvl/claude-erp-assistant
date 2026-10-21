@@ -106,6 +106,19 @@ class Lake:
             return pa.Table.from_batches(batches)
         return schema.empty_table() if schema is not None else pa.table({})
 
+    def read_files(self, layer: Layer, files: Iterable[str], schema: pa.Schema) -> pa.Table:
+        fs, root = self._resolve(layer)
+        batches = list(stream_parts(fs, [f"{root}/{file}" for file in files], DEFAULT_BATCH_ROWS, None))
+        return pa.Table.from_batches(batches, schema=schema) if batches else schema.empty_table()
+
+    def delete_partition(self, layer: Layer, dataset: str, partition: str) -> None:
+        fs, _ = self._resolve(layer)
+        self._delete_if_present(fs, self.build_partition_path(layer, dataset, partition))
+
+    def to_relative(self, layer: Layer, path: str) -> str:
+        _, root = self._resolve(layer)
+        return path.removeprefix(f"{root}/")
+
     def read_part_schemas(self, layer: Layer, dataset: str, partitions: Iterable[str] | None = None) -> list[pa.Schema]:
         fs, _ = self._resolve(layer)
         schemas = []

@@ -1,9 +1,12 @@
-from datetime import date
+from datetime import UTC, date, datetime
+from uuid import uuid4
 
 import pandas as pd
 import pyarrow as pa
 import pytest
 
+from lake.bronze import DATASET as BRONZE_DATASET
+from lake.bronze import to_table
 from lake.gold import (
     DIM_DATE_SCHEMA,
     DIM_PRODUCT_SCHEMA,
@@ -14,8 +17,18 @@ from lake.gold import (
     build_dim_product,
     build_fact_invoice,
     build_fact_invoice_line,
+    build_pointer,
+    find_unreferenced_versions,
+    materialize_gold,
+    name_version,
+    read_current,
+    read_gold_table,
+    split_by_month,
     to_date_key,
 )
+from lake.settings import LakeSettings, Layer
+from lake.silver import merge_silver
+from lake.storage import Lake
 
 
 def _day(text):
@@ -203,3 +216,147 @@ def test_gold_tables_convert_to_their_declared_schemas(build, schema):
 
     # Assert
     assert table.schema.equals(schema)
+
+
+RUN = datetime(2026, 10, 21, 14, tzinfo=UTC)
+
+
+def test_name_version_sorts_by_time_down_to_the_microsecond():
+    # Arrange / Act
+    names = [name_version(datetime(2026, 10, 21, 14, 0, 0, micro, tzinfo=UTC)) for micro in (2, 10)]
+
+    # Assert
+    assert names == ["v=20261021T140000000002Z", "v=20261021T140000000010Z"]
+    assert names == sorted(names)
+
+
+def test_split_by_month_groups_facts_by_their_posting_month():
+    # Arrange
+    facts = pd.DataFrame({"invoice_id": ["S1", "S2", "S3"], "posting_date_key": [20260930, 20261001, 20260901]})
+
+    # Act
+    parts = split_by_month(facts)
+
+    # Assert
+    assert [(name, rows["invoice_id"].tolist()) for name, rows in parts] == [
+        ("posting_month=2026-09", ["S1", "S3"]), ("posting_month=2026-10", ["S2"])
+    ]
+
+
+# The pointer keeps the two versions before it, so a reader that picked one of them up to two
+# publications ago can still finish reading its files.
+@pytest.mark.parametrize(
+    ("previous", "expected"),
+    [
+        (None, []),
+        ({"version": "v=1", "retained": []}, ["v=1"]),
+        ({"version": "v=3", "retained": ["v=1", "v=2"]}, ["v=2", "v=3"]),
+    ],
+    ids=["first_publication", "one_before", "oldest_drops_out"],
+)
+def test_build_pointer_retains_the_two_previous_versions(previous, expected):
+    # Arrange / Act
+    pointer = build_pointer(previous, "v=4", {"dim_date": ["dim_date/v=4/all/part-00000.parquet"]}, {"dim_date": 1}, RUN)
+
+    # Assert
+    assert (pointer["version"], pointer["retained"]) == ("v=4", expected)
+
+
+# Cleaning up means "delete everything not kept", not "delete the oldest": a run that crashed
+# before publishing leaves files no pointer will ever name.
+def test_find_unreferenced_versions_returns_old_and_never_published_versions():
+    # Arrange
+    stored = {"dim_date": ["v=1", "v=2", "v=3", "v=4", "v=5"], "fact_invoice": ["v=2", "v=4"]}
+    pointer = {"version": "v=4", "retained": ["v=2", "v=3"]}
+
+    # Act
+    removed = find_unreferenced_versions(stored, pointer)
+
+    # Assert
+    assert removed == [("dim_date", "v=1"), ("dim_date", "v=5")]
+
+
+@pytest.fixture
+def lake():
+    # Arrange: every test gets its own root, because fsspec's memory filesystem is one process-wide store
+    root = f"memory://gold-{uuid4().hex}"
+    return Lake(LakeSettings(layer_uris={layer: f"{root}/{layer}" for layer in Layer}))
+
+
+def _document(key, posted, amount=100.0):
+    dates = {"postingDate": posted, "documentCreateDate": posted, "documentCreateDate1": posted,
+             "dueInDate": posted, "baselineCreateDate": posted, "clearDate": None}
+    line = {"lineNo": 1, "sku": "LAP-DELL-7450", "productName": "Latitude 7450", "brand": "Dell",
+            "category": "Laptop", "quantity": 1, "unitPrice": amount, "lineTotal": amount}
+    return {"_id": key, "businessCode": "U001", "customer": {"number": "0100001196", "name": "DOLLAR llc", "nameLower": "dollar llc"},
+            "currency": "USD", "documentType": "RV", "isOpen": True, "amounts": {"totalOpen": amount}, "dates": dates,
+            "paymentTerms": "NAA8", "lines": [line], "updatedAt": datetime(2026, 10, 15)}
+
+
+@pytest.fixture
+def silver(lake):
+    # Arrange: two September invoices and one from October, merged into silver
+    documents = [_document("S1", datetime(2026, 9, 1)), _document("S2", datetime(2026, 9, 2)), _document("S3", datetime(2026, 10, 1))]
+    lake.replace_partition(Layer.BRONZE, BRONZE_DATASET, "changed_at=2026-10-16-00", [to_table(documents, RUN)])
+    merge_silver(lake)
+    return lake
+
+
+def test_materialize_gold_publishes_every_table_behind_the_pointer(silver):
+    # Arrange / Act
+    run = materialize_gold(silver, RUN)
+
+    # Assert
+    pointer = read_current(silver)
+    assert pointer["version"] == run.version == "v=20261021T140000000000Z"
+    assert run.rows == {"dim_date": 31, "dim_customer": 1, "dim_product": 1, "fact_invoice": 3, "fact_invoice_line": 3}
+    assert [file.split("/")[2] for file in pointer["tables"]["fact_invoice"]] == ["posting_month=2026-09", "posting_month=2026-10"]
+    assert read_gold_table(silver, pointer, "fact_invoice")["invoice_id"].to_pylist() == ["S1", "S2", "S3"]
+
+
+def test_materialize_gold_keeps_three_versions_and_deletes_the_rest(silver):
+    # Arrange
+    runs = [datetime(2026, 10, 21, hour, tzinfo=UTC) for hour in (10, 11, 12)]
+    for when in runs:
+        materialize_gold(silver, when)
+
+    # Act
+    run = materialize_gold(silver, datetime(2026, 10, 21, 13, tzinfo=UTC))
+
+    # Assert
+    kept = [name_version(when) for when in runs[1:]] + [run.version]
+    assert silver.list_partitions(Layer.GOLD, "fact_invoice") == kept
+    assert run.removed == [f"{name}/{name_version(runs[0])}" for name in ("dim_date", "dim_customer", "dim_product", "fact_invoice", "fact_invoice_line")]
+
+
+class CrashingLake(Lake):
+    def __init__(self, settings):
+        super().__init__(settings)
+        self.crash = False
+
+    def write_pointer(self, layer, name, value):
+        if self.crash:
+            raise OSError("connection reset while publishing")
+        super().write_pointer(layer, name, value)
+
+
+# A run that dies after writing its files but before the pointer must leave readers on the
+# previous complete version, and the next run must sweep the orphaned files away.
+def test_materialize_gold_crash_before_the_pointer_keeps_the_previous_version(silver):
+    # Arrange
+    crashing = CrashingLake(silver._settings)
+    first = materialize_gold(crashing, datetime(2026, 10, 21, 10, tzinfo=UTC))
+    crashing.crash = True
+    with pytest.raises(OSError):
+        materialize_gold(crashing, datetime(2026, 10, 21, 11, tzinfo=UTC))
+    orphan = name_version(datetime(2026, 10, 21, 11, tzinfo=UTC))
+
+    # Act
+    pointer = read_current(crashing)
+    crashing.crash = False
+    later = materialize_gold(crashing, datetime(2026, 10, 21, 12, tzinfo=UTC))
+
+    # Assert
+    assert pointer["version"] == first.version
+    assert read_gold_table(crashing, pointer, "fact_invoice").num_rows == 3
+    assert f"fact_invoice/{orphan}" in later.removed
