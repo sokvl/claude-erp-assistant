@@ -117,8 +117,9 @@ def test_build_dim_date_without_invoices_is_empty_with_its_columns():
     assert (calendar.empty, list(calendar.columns)) == (True, DIM_DATE_SCHEMA.names)
 
 
-# Customers are found by any name they were invoiced under, so the aliases ship with gold; the
-# date each name was last seen is silver's business, not the contract's.
+# Customers are found by any name they were invoiced under, so the aliases ship with gold, with a
+# lower-case copy to match a prefix against (like customer.nameLower in MongoDB); the date each
+# name was last seen is silver's business, not the contract's.
 def test_build_dim_customer_alias_keeps_each_name_once_without_last_seen():
     # Arrange
     aliases = pd.DataFrame({"customer_number": ["2", "1", "1"], "name": ["GEOR in", "DOLLAR llc", "DOLLAR llc"],
@@ -128,7 +129,7 @@ def test_build_dim_customer_alias_keeps_each_name_once_without_last_seen():
     dimension = build_dim_customer_alias(aliases)
 
     # Assert
-    assert dimension.values.tolist() == [["1", "DOLLAR llc"], ["2", "GEOR in"]]
+    assert dimension.values.tolist() == [["1", "DOLLAR llc", "dollar llc"], ["2", "GEOR in", "geor in"]]
 
 
 def test_build_dim_customer_keeps_number_canonical_name_and_alias_count():
@@ -452,7 +453,7 @@ def test_count_missing_keys_names_each_broken_relation():
     tables = _gold(_clean_silver())
     tables["dim_product"] = tables["dim_product"][tables["dim_product"]["sku"] != "SRV-DELL-R660"]
     tables["dim_date"] = tables["dim_date"][tables["dim_date"]["date_key"] != 20260910]
-    tables["dim_customer_alias"] = pd.concat([tables["dim_customer_alias"], pd.DataFrame({"customer_number": ["9"], "name": ["GHOST"]})])
+    tables["dim_customer_alias"] = pd.concat([tables["dim_customer_alias"], pd.DataFrame({"customer_number": ["9"], "name": ["GHOST"], "name_lower": ["ghost"]})])
 
     # Act
     missing = count_missing_keys(tables)

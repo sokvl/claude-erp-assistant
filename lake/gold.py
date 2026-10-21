@@ -39,7 +39,7 @@ DIM_DATE_SCHEMA = pa.schema(
     ]
 )
 DIM_CUSTOMER_SCHEMA = pa.schema([("customer_number", pa.string()), ("canonical_name", pa.string()), ("alias_count", pa.int64())])
-DIM_CUSTOMER_ALIAS_SCHEMA = pa.schema([("customer_number", pa.string()), ("name", pa.string())])
+DIM_CUSTOMER_ALIAS_SCHEMA = pa.schema([("customer_number", pa.string()), ("name", pa.string()), ("name_lower", pa.string())])
 DIM_PRODUCT_SCHEMA = pa.schema(
     [("sku", pa.string()), ("product_name", pa.string()), ("brand", pa.string()), ("category", pa.string())]
 )
@@ -106,8 +106,8 @@ def build_dim_customer(customers: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_dim_customer_alias(aliases: pd.DataFrame) -> pd.DataFrame:
-    names = aliases[DIM_CUSTOMER_ALIAS_SCHEMA.names].drop_duplicates()
-    return names.sort_values(DIM_CUSTOMER_ALIAS_SCHEMA.names).reset_index(drop=True)
+    names = aliases[["customer_number", "name"]].drop_duplicates().sort_values(["customer_number", "name"])
+    return names.assign(name_lower=names["name"].str.lower()).reset_index(drop=True)
 
 
 def build_dim_product(lines: pd.DataFrame, invoices: pd.DataFrame) -> pd.DataFrame:
