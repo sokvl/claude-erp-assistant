@@ -17,7 +17,7 @@ from lake.gold import (
     read_published_tables,
     read_silver_input,
 )
-from lake.reconciliation import Reconciliation, reconcile
+from lake.reconciliation import Reconciliation, find_watermark, reconcile
 from lake.settings import Layer, Role, load_settings
 from lake.silver import (
     SilverRun,
@@ -28,6 +28,7 @@ from lake.silver import (
     find_schema_drift,
     merge_silver,
     read_invoice_facts,
+    read_processed_partitions,
 )
 from lake.storage import Lake
 
@@ -217,10 +218,11 @@ def evaluate_gold_checks(
 def gold_invoices(lake: LakeResource) -> dg.MaterializeResult:
     store = lake.open()
     silver = read_silver_input(store)
-    run = publish_gold(store, build_gold(silver.invoices, silver.lines, silver.customers), datetime.now(UTC))
+    data_as_of = find_watermark(read_processed_partitions(store), FIRST_HOUR)
+    run = publish_gold(store, build_gold(silver), datetime.now(UTC), data_as_of)
     published = read_published_tables(store, read_current(store))
     return dg.MaterializeResult(
-        metadata={"version": run.version, "rows": dg.MetadataValue.json(run.rows), "removed_versions": len(run.removed)},
+        metadata={"version": run.version, "data_as_of": data_as_of.isoformat() if data_as_of else "unknown", "rows": dg.MetadataValue.json(run.rows), "removed_versions": len(run.removed)},
         check_results=evaluate_gold_checks(
             count_duplicate_keys(published), count_missing_keys(published), compare_with_silver(silver, published)
         ),

@@ -14,6 +14,7 @@ from lake.gold import (
     FACT_INVOICE_LINE_SCHEMA,
     FACT_INVOICE_SCHEMA,
     build_dim_customer,
+    build_dim_customer_alias,
     build_dim_date,
     build_dim_product,
     build_fact_invoice,
@@ -114,6 +115,20 @@ def test_build_dim_date_without_invoices_is_empty_with_its_columns():
 
     # Assert
     assert (calendar.empty, list(calendar.columns)) == (True, DIM_DATE_SCHEMA.names)
+
+
+# Customers are found by any name they were invoiced under, so the aliases ship with gold; the
+# date each name was last seen is silver's business, not the contract's.
+def test_build_dim_customer_alias_keeps_each_name_once_without_last_seen():
+    # Arrange
+    aliases = pd.DataFrame({"customer_number": ["2", "1", "1"], "name": ["GEOR in", "DOLLAR llc", "DOLLAR llc"],
+                            "last_seen": pd.to_datetime(["2026-01-01"] * 3, utc=True)})
+
+    # Act
+    dimension = build_dim_customer_alias(aliases)
+
+    # Assert
+    assert dimension.values.tolist() == [["1", "DOLLAR llc"], ["2", "GEOR in"]]
 
 
 def test_build_dim_customer_keeps_number_canonical_name_and_alias_count():
@@ -262,10 +277,25 @@ def test_split_by_month_groups_facts_by_their_posting_month():
 )
 def test_build_pointer_retains_the_two_previous_versions(previous, expected):
     # Arrange / Act
-    pointer = build_pointer(previous, "v=4", {"dim_date": ["dim_date/v=4/all/part-00000.parquet"]}, {"dim_date": 1}, RUN)
+    pointer = build_pointer(previous, "v=4", {"dim_date": ["dim_date/v=4/all/part-00000.parquet"]}, {"dim_date": 1}, RUN, None)
 
     # Assert
     assert (pointer["version"], pointer["retained"]) == ("v=4", expected)
+
+
+# The consumer refuses a contract version it does not know, and shows how fresh the data is: gold is
+# as fresh as the last bronze hour silver merged without a gap, not as the moment it was published.
+def test_build_pointer_carries_the_contract_version_and_the_data_watermark():
+    # Arrange
+    watermark = datetime(2026, 10, 21, 13, tzinfo=UTC)
+
+    # Act
+    pointer = build_pointer(None, "v=1", {}, {}, RUN, watermark)
+
+    # Assert
+    assert (pointer["contract_version"], pointer["data_as_of"], pointer["published_at"]) == (
+        1, "2026-10-21T13:00:00+00:00", "2026-10-21T14:00:00+00:00"
+    )
 
 
 # Cleaning up means "delete everything not kept", not "delete the oldest": a run that crashed
@@ -315,7 +345,7 @@ def test_materialize_gold_publishes_every_table_behind_the_pointer(silver):
     # Assert
     pointer = read_current(silver)
     assert pointer["version"] == run.version == "v=20261021T140000000000Z"
-    assert run.rows == {"dim_date": 31, "dim_customer": 1, "dim_product": 1, "fact_invoice": 3, "fact_invoice_line": 3}
+    assert run.rows == {"dim_date": 31, "dim_customer": 1, "dim_customer_alias": 1, "dim_product": 1, "fact_invoice": 3, "fact_invoice_line": 3}
     assert [file.split("/")[2] for file in pointer["tables"]["fact_invoice"]] == ["posting_month=2026-09", "posting_month=2026-10"]
     assert read_gold_table(silver, pointer, "fact_invoice")["invoice_id"].to_pylist() == ["S1", "S2", "S3"]
 
@@ -332,7 +362,7 @@ def test_materialize_gold_keeps_three_versions_and_deletes_the_rest(silver):
     # Assert
     kept = [name_version(when) for when in runs[1:]] + [run.version]
     assert silver.list_partitions(Layer.GOLD, "fact_invoice") == kept
-    assert run.removed == [f"{name}/{name_version(runs[0])}" for name in ("dim_date", "dim_customer", "dim_product", "fact_invoice", "fact_invoice_line")]
+    assert run.removed == [f"{name}/{name_version(runs[0])}" for name in ("dim_date", "dim_customer", "dim_customer_alias", "dim_product", "fact_invoice", "fact_invoice_line")]
 
 
 class CrashingLake(Lake):
@@ -376,12 +406,14 @@ def _clean_silver():
         {"invoice_id": "S1", "line_no": 2, "line_total": 20.0, "sku": "SRV-DELL-R660"},
         {"invoice_id": "S2", "line_no": 1, "line_total": 54273.28},
     )
-    customers = pd.DataFrame({"customer_number": ["0100001196"], "canonical_name": ["DOLLAR"], "alias_count": [11]})
-    return SilverInput(invoices=invoices, lines=lines, customers=customers)
+    customers = pd.DataFrame({"customer_number": ["0100001196"], "canonical_name": ["DOLLAR"], "alias_count": [2]})
+    aliases = pd.DataFrame({"customer_number": ["0100001196"] * 2, "name": ["DOLLAR llc", "DOLLAR corp"],
+                            "last_seen": pd.to_datetime(["2026-09-01", "2026-08-01"], utc=True)})
+    return SilverInput(invoices=invoices, lines=lines, customers=customers, aliases=aliases)
 
 
 def _gold(silver):
-    return build_gold(silver.invoices, silver.lines, silver.customers)
+    return build_gold(silver)
 
 
 def test_gold_checks_on_a_clean_build_find_nothing():
@@ -420,6 +452,7 @@ def test_count_missing_keys_names_each_broken_relation():
     tables = _gold(_clean_silver())
     tables["dim_product"] = tables["dim_product"][tables["dim_product"]["sku"] != "SRV-DELL-R660"]
     tables["dim_date"] = tables["dim_date"][tables["dim_date"]["date_key"] != 20260910]
+    tables["dim_customer_alias"] = pd.concat([tables["dim_customer_alias"], pd.DataFrame({"customer_number": ["9"], "name": ["GHOST"]})])
 
     # Act
     missing = count_missing_keys(tables)
@@ -429,6 +462,7 @@ def test_count_missing_keys_names_each_broken_relation():
         "fact_invoice.payment_date_key -> dim_date.date_key": 1,
         "fact_invoice_line.payment_date_key -> dim_date.date_key": 2,
         "fact_invoice_line.sku -> dim_product.sku": 1,
+        "dim_customer_alias.customer_number -> dim_customer.customer_number": 1,
     }
 
 

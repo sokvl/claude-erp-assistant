@@ -7,7 +7,17 @@ import pandas as pd
 import pyarrow as pa
 
 from lake.settings import Layer
-from lake.silver import CUSTOMER_SCHEMA, CUSTOMERS, INVOICE_SCHEMA, INVOICES, LINE_SCHEMA, LINES, convert_to_arrow
+from lake.silver import (
+    ALIAS_SCHEMA,
+    ALIASES,
+    CUSTOMER_SCHEMA,
+    CUSTOMERS,
+    INVOICE_SCHEMA,
+    INVOICES,
+    LINE_SCHEMA,
+    LINES,
+    convert_to_arrow,
+)
 from lake.storage import Lake
 
 DATE_ROLES = {"posting_date": "posting_date_key", "due_date": "due_date_key", "clear_date": "payment_date_key"}
@@ -29,6 +39,7 @@ DIM_DATE_SCHEMA = pa.schema(
     ]
 )
 DIM_CUSTOMER_SCHEMA = pa.schema([("customer_number", pa.string()), ("canonical_name", pa.string()), ("alias_count", pa.int64())])
+DIM_CUSTOMER_ALIAS_SCHEMA = pa.schema([("customer_number", pa.string()), ("name", pa.string())])
 DIM_PRODUCT_SCHEMA = pa.schema(
     [("sku", pa.string()), ("product_name", pa.string()), ("brand", pa.string()), ("category", pa.string())]
 )
@@ -94,6 +105,11 @@ def build_dim_customer(customers: pd.DataFrame) -> pd.DataFrame:
     return customers[DIM_CUSTOMER_SCHEMA.names].sort_values("customer_number").reset_index(drop=True)
 
 
+def build_dim_customer_alias(aliases: pd.DataFrame) -> pd.DataFrame:
+    names = aliases[DIM_CUSTOMER_ALIAS_SCHEMA.names].drop_duplicates()
+    return names.sort_values(DIM_CUSTOMER_ALIAS_SCHEMA.names).reset_index(drop=True)
+
+
 def build_dim_product(lines: pd.DataFrame, invoices: pd.DataFrame) -> pd.DataFrame:
     sold = lines.merge(invoices[["invoice_id", "posting_date"]], on="invoice_id", how="inner")
     latest = sold.sort_values(["sku", "posting_date", "invoice_id", "line_no"]).drop_duplicates("sku", keep="last")
@@ -118,12 +134,14 @@ def build_fact_invoice_line(lines: pd.DataFrame, fact_invoice: pd.DataFrame) -> 
 TABLE_SCHEMAS: Mapping[str, pa.Schema] = {
     "dim_date": DIM_DATE_SCHEMA,
     "dim_customer": DIM_CUSTOMER_SCHEMA,
+    "dim_customer_alias": DIM_CUSTOMER_ALIAS_SCHEMA,
     "dim_product": DIM_PRODUCT_SCHEMA,
     "fact_invoice": FACT_INVOICE_SCHEMA,
     "fact_invoice_line": FACT_INVOICE_LINE_SCHEMA,
 }
 FACT_TABLES = ("fact_invoice", "fact_invoice_line")
 POINTER = "_current.json"
+CONTRACT_VERSION = 1
 KEEP_VERSIONS = 3
 WHOLE_TABLE = "all"
 
@@ -131,6 +149,7 @@ WHOLE_TABLE = "all"
 PRIMARY_KEYS: Mapping[str, list[str]] = {
     "dim_date": ["date_key"],
     "dim_customer": ["customer_number"],
+    "dim_customer_alias": ["customer_number", "name"],
     "dim_product": ["sku"],
     "fact_invoice": ["invoice_id"],
     "fact_invoice_line": ["invoice_id", "line_no"],
@@ -139,6 +158,7 @@ FOREIGN_KEYS = [
     *[(fact, "customer_number", "dim_customer", "customer_number") for fact in FACT_TABLES],
     *[(fact, key, "dim_date", "date_key") for fact in FACT_TABLES for key in DATE_KEYS],
     ("fact_invoice_line", "sku", "dim_product", "sku"),
+    ("dim_customer_alias", "customer_number", "dim_customer", "customer_number"),
 ]
 
 
@@ -147,6 +167,7 @@ class SilverInput:
     invoices: pd.DataFrame
     lines: pd.DataFrame
     customers: pd.DataFrame
+    aliases: pd.DataFrame
 
 
 @dataclass(frozen=True)
@@ -156,14 +177,15 @@ class GoldRun:
     removed: list[str]
 
 
-def build_gold(invoices: pd.DataFrame, lines: pd.DataFrame, customers: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    fact_invoice = build_fact_invoice(invoices, lines)
+def build_gold(silver: SilverInput) -> dict[str, pd.DataFrame]:
+    fact_invoice = build_fact_invoice(silver.invoices, silver.lines)
     return {
-        "dim_date": build_dim_date(invoices),
-        "dim_customer": build_dim_customer(customers),
-        "dim_product": build_dim_product(lines, invoices),
+        "dim_date": build_dim_date(silver.invoices),
+        "dim_customer": build_dim_customer(silver.customers),
+        "dim_customer_alias": build_dim_customer_alias(silver.aliases),
+        "dim_product": build_dim_product(silver.lines, silver.invoices),
         "fact_invoice": fact_invoice,
-        "fact_invoice_line": build_fact_invoice_line(lines, fact_invoice),
+        "fact_invoice_line": build_fact_invoice_line(silver.lines, fact_invoice),
     }
 
 
@@ -190,10 +212,23 @@ def write_version(lake: Lake, tables: Mapping[str, pd.DataFrame], version: str) 
 
 
 def build_pointer(
-    previous: Mapping[str, Any] | None, version: str, files: Mapping[str, list[str]], rows: Mapping[str, int], now: datetime
+    previous: Mapping[str, Any] | None,
+    version: str,
+    files: Mapping[str, list[str]],
+    rows: Mapping[str, int],
+    now: datetime,
+    data_as_of: datetime | None,
 ) -> dict[str, Any]:
     retained = [] if previous is None else [*previous["retained"], previous["version"]][-(KEEP_VERSIONS - 1):]
-    return {"version": version, "published_at": now.isoformat(), "tables": dict(files), "rows": dict(rows), "retained": retained}
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "version": version,
+        "published_at": now.isoformat(),
+        "data_as_of": data_as_of.isoformat() if data_as_of else None,
+        "tables": dict(files),
+        "rows": dict(rows),
+        "retained": retained,
+    }
 
 
 def find_unreferenced_versions(stored: Mapping[str, list[str]], pointer: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -214,14 +249,15 @@ def read_silver_input(lake: Lake) -> SilverInput:
         invoices=lake.read_dataset(Layer.SILVER, INVOICES, schema=INVOICE_SCHEMA).to_pandas(),
         lines=lake.read_dataset(Layer.SILVER, LINES, schema=LINE_SCHEMA).to_pandas(),
         customers=lake.read_dataset(Layer.SILVER, CUSTOMERS, schema=CUSTOMER_SCHEMA).to_pandas(),
+        aliases=lake.read_dataset(Layer.SILVER, ALIASES, schema=ALIAS_SCHEMA).to_pandas(),
     )
 
 
-def publish_gold(lake: Lake, tables: Mapping[str, pd.DataFrame], now: datetime) -> GoldRun:
+def publish_gold(lake: Lake, tables: Mapping[str, pd.DataFrame], now: datetime, data_as_of: datetime | None = None) -> GoldRun:
     version = name_version(now)
     files = write_version(lake, tables, version)
     rows = {name: len(frame) for name, frame in tables.items()}
-    pointer = build_pointer(read_current(lake), version, files, rows, now)
+    pointer = build_pointer(read_current(lake), version, files, rows, now, data_as_of)
     lake.write_pointer(Layer.GOLD, POINTER, pointer)
     stored = {name: lake.list_partitions(Layer.GOLD, name) for name in TABLE_SCHEMAS}
     removed = find_unreferenced_versions(stored, pointer)
@@ -230,9 +266,8 @@ def publish_gold(lake: Lake, tables: Mapping[str, pd.DataFrame], now: datetime) 
     return GoldRun(version=version, rows=rows, removed=[f"{name}/{old}" for name, old in removed])
 
 
-def materialize_gold(lake: Lake, now: datetime) -> GoldRun:
-    silver = read_silver_input(lake)
-    return publish_gold(lake, build_gold(silver.invoices, silver.lines, silver.customers), now)
+def materialize_gold(lake: Lake, now: datetime, data_as_of: datetime | None = None) -> GoldRun:
+    return publish_gold(lake, build_gold(read_silver_input(lake)), now, data_as_of)
 
 
 def read_published_tables(lake: Lake, pointer: Mapping[str, Any]) -> dict[str, pd.DataFrame]:
