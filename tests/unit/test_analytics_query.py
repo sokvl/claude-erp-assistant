@@ -3,7 +3,7 @@ from datetime import date
 import duckdb
 import pytest
 
-from app.analytics.query import build_analytics_query, read_month, select_month_files, to_date_key
+from app.analytics.query import build_analytics_query, half_even_division, read_month, select_month_files, to_date_key
 from app.invoices.enums import GroupBy
 from app.invoices.schemas import InvoiceAnalyticsParams
 
@@ -243,3 +243,29 @@ def test_read_month_and_date_key_formats():
     # Arrange / Act / Assert
     assert (read_month("x/posting_month=2026-09/part-00000.parquet"), read_month("x/all/p")) == ("2026-09", None)
     assert to_date_key(date(2026, 1, 5)) == 20260105
+
+
+# Money is summed in whole cents and averaged with integer half-even rounding: doubles turn an
+# exact 3000.495 into 3000.4949..., and in 20 000 random averages a double round_even missed 699.
+# These three ties are the ones the parity test found, where MongoDB's $round on doubles went
+# down twice and up once.
+@pytest.mark.parametrize(
+    ("numerator", "denominator", "expected"),
+    [
+        (600099, 2, 300050),
+        (620070, 4, 155018),
+        (401001, 2, 200500),
+        (31000, 3, 10333),
+        (31000, 7, 4429),
+        (5, 2, 2),
+        (7, 2, 4),
+        (0, 5, 0),
+    ],
+    ids=["3000.495_to_even_up", "1550.175_to_even_up", "2005.005_to_even_down", "below_half", "above_half", "half_to_even_2", "half_to_even_4", "zero"],
+)
+def test_half_even_division_rounds_exact_halves_to_the_even_neighbour(numerator, denominator, expected):
+    # Arrange / Act
+    result = duckdb.connect().execute(f"SELECT {half_even_division(str(numerator), str(denominator))}").fetchone()[0]
+
+    # Assert
+    assert result == expected

@@ -108,20 +108,29 @@ def build_conditions(filters: InvoiceFilter, as_of: date, line_grain: bool) -> t
     return conditions, values
 
 
+def half_even_division(numerator: str, denominator: str) -> str:
+    quotient, remainder = f"(({numerator}) // ({denominator}))", f"(({numerator}) % ({denominator}))"
+    return (
+        f"({quotient} + CASE WHEN 2 * {remainder} > ({denominator}) THEN 1 "
+        f"WHEN 2 * {remainder} = ({denominator}) AND {quotient} % 2 = 1 THEN 1 ELSE 0 END)"
+    )
+
+
 def build_per_invoice(grouping: Grouping, line_grain: bool, where: str) -> str:
     joins = " ".join(grouping.joins)
     if line_grain:
         return f"""
             SELECT {grouping.key} AS key, max({grouping.label or 'NULL'}) AS label, f.invoice_id,
-                   any_value(f.currency) AS currency, sum(f.line_total) AS amount, sum(f.quantity) AS units,
+                   any_value(f.currency) AS currency, sum(CAST(round(f.line_total * 100) AS BIGINT)) AS cents,
+                   sum(f.quantity) AS units,
                    any_value(f.is_open) AS is_open, any_value(f.due_date_key) AS due_date_key,
                    any_value(f.days_to_pay) AS days_to_pay
             FROM read_parquet($fact_invoice_line) f {joins}
             {where}
             GROUP BY key, f.invoice_id"""
     return f"""
-            SELECT {grouping.key} AS key, {grouping.label or 'NULL'} AS label, f.invoice_id, f.currency, f.amount,
-                   NULL AS units, f.is_open, f.due_date_key, f.days_to_pay
+            SELECT {grouping.key} AS key, {grouping.label or 'NULL'} AS label, f.invoice_id, f.currency,
+                   CAST(round(f.amount * 100) AS BIGINT) AS cents, NULL AS units, f.is_open, f.due_date_key, f.days_to_pay
             FROM read_parquet($fact_invoice) f {joins}
             {where}"""
 
@@ -135,17 +144,17 @@ def build_analytics_query(
     line_grain = group_by in LINE_ITEM_FIELDS
     conditions, values = build_conditions(params, as_of, line_grain)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    order = "key" if group_by in PERIOD_UNITS else "total_amount DESC, key"
+    order = "key" if group_by in PERIOD_UNITS else "total_cents DESC, key"
     sql = f"""
         WITH per_invoice AS ({build_per_invoice(GROUPINGS[group_by], line_grain, where)}),
         groups AS (
             SELECT currency, key, max(label) AS label,
                    count(*) AS invoice_count,
-                   sum(amount) AS total_amount,
-                   avg(amount) AS average_amount,
-                   sum(CASE WHEN is_open THEN amount ELSE 0 END) AS open_amount,
-                   sum(CASE WHEN is_open AND due_date_key < $as_of THEN amount ELSE 0 END) AS overdue_amount,
-                   avg(CASE WHEN NOT is_open THEN days_to_pay END) AS average_days_to_pay,
+                   sum(cents) AS total_cents,
+                   sum(CASE WHEN is_open THEN cents ELSE 0 END) AS open_cents,
+                   sum(CASE WHEN is_open AND due_date_key < $as_of THEN cents ELSE 0 END) AS overdue_cents,
+                   sum(CASE WHEN NOT is_open THEN days_to_pay END) AS paid_days,
+                   count(CASE WHEN NOT is_open THEN days_to_pay END) AS paid_invoices,
                    sum(units) AS units
             FROM per_invoice
             GROUP BY currency, key
@@ -156,13 +165,14 @@ def build_analytics_query(
             FROM groups
         )
         SELECT currency, group_count, key, label, invoice_count,
-               round_even(total_amount, 2) AS total_amount,
-               round_even(average_amount, 2) AS average_amount,
-               round_even(open_amount, 2) AS open_amount,
-               round_even(overdue_amount, 2) AS overdue_amount,
-               round_even(average_days_to_pay, 1) AS average_days_to_pay,
+               total_cents / 100.0 AS total_amount,
+               {half_even_division("total_cents", "invoice_count")} / 100.0 AS average_amount,
+               open_cents / 100.0 AS open_amount,
+               overdue_cents / 100.0 AS overdue_amount,
+               CASE WHEN paid_invoices > 0 THEN {half_even_division("10 * paid_days", "paid_invoices")} / 10.0 END
+                   AS average_days_to_pay,
                units,
-               round_even(total_amount / nullif(units, 0), 2) AS average_unit_price
+               CASE WHEN units > 0 THEN {half_even_division("total_cents", "units")} / 100.0 END AS average_unit_price
         FROM ranked
         WHERE position <= $rows
         ORDER BY currency, position"""
@@ -172,3 +182,8 @@ def build_analytics_query(
         if re.search(rf"\${table}\b", sql):
             values[table] = list(files[table])
     return sql, values
+
+
+def build_coverage_query(files: Sequence[str]) -> tuple[str, dict[str, Any]]:
+    sql = "SELECT min(posting_date_key), max(posting_date_key) FROM read_parquet($fact_invoice)"
+    return sql, {"fact_invoice": list(files)}
