@@ -85,6 +85,7 @@ services:
     environment:
       MONGO_URI: mongodb://invoices_app:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}@mongo1.localhost:27017,mongo2.localhost:27018,mongo3.localhost:27019/invoices_db?authSource=admin&replicaSet=rs0
       VAULT_ADDR: http://vault:8200
+      LAKE_S3_ENDPOINT: http://garage:3900
       VAULT_ROLE_ID_FILE: /run/secrets/vault_role_id
       VAULT_SECRET_ID_FILE: /run/secrets/vault_secret_id
     volumes:

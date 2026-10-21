@@ -13,6 +13,7 @@ COPY src/ src/
 
 RUN useradd --create-home --uid 1000 app
 USER app
+RUN python -c "import duckdb; duckdb.execute('INSTALL httpfs')"
 
 EXPOSE 8000
 

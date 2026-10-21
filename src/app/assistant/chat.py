@@ -13,6 +13,7 @@ import httpx2
 from anthropic.types import Message, ToolUseBlock
 from pymongo.errors import PyMongoError
 
+from app.analytics.gold import GoldUnavailable
 from app.assistant.dispatch import ToolInputError, ToolOutput, run_tool
 from app.assistant.profiles import Profile
 from app.utils.dates import today_in_business_timezone
@@ -32,6 +33,7 @@ ERROR_MESSAGES = {
     "refused": "The assistant can't help with that request.",
     "empty_answer": "No answer was produced. Please rephrase the question.",
     "database_unavailable": "The database is unavailable. Please try again later.",
+    "analytics_unavailable": "Invoice analytics are unavailable right now. Please try again later.",
     "too_many_steps": "The lookup took too many steps. Please ask a more specific question.",
     "conflict": "This conversation changed in the meantime. Please send your message again.",
     "unexpected_error": "Something went wrong. Please try again.",
@@ -281,6 +283,10 @@ def _tool_result(
         _record(steps, name, "FAIL", started_at, type(exc).__name__)
         logger.exception("tool %s failed on the database", block.name)
         raise ChatError("database_unavailable") from exc
+    except GoldUnavailable as exc:
+        _record(steps, name, "FAIL", started_at, "gold unavailable")
+        logger.exception("tool %s could not read gold", block.name)
+        raise ChatError("analytics_unavailable") from exc
     except Exception as exc:
         _record(steps, name, "is_error", started_at, f"unexpected {type(exc).__name__}")
         logger.exception("tool %s failed unexpectedly", block.name)

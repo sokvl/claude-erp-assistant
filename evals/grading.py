@@ -13,7 +13,8 @@ from app.assistant.tools import (
 from app.catalog.schemas import ProductSearchParams
 from app.catalog.service import search_catalog
 from app.invoices.schemas import InvoiceAnalyticsParams
-from app.invoices.service import analyze_invoices, list_invoices
+from app.analytics.service import analyze_gold, get_gold_settings
+from app.invoices.service import list_invoices
 from app.limits import MAX_PAGE_SIZE
 from cases import Case, Gold
 
@@ -29,7 +30,7 @@ def _analytics(db: Any, params: dict[str, Any]) -> dict[str, Any]:
     # chart_invoices draws the rows analyze_invoices computes, so the same gold query
     # grades both; only the drawing options have to come off first.
     figures = {key: value for key, value in params.items() if key not in CHART_ONLY_FIELDS}
-    return analyze_invoices(db["invoices"], InvoiceAnalyticsParams.model_validate(figures))
+    return analyze_gold(get_gold_settings(), InvoiceAnalyticsParams.model_validate(figures))
 
 
 def _row_ids(result: dict[str, Any]) -> frozenset[str]:

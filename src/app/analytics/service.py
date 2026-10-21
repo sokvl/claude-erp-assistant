@@ -1,12 +1,15 @@
+import os
 from collections.abc import Iterable, Mapping
 from datetime import date
+from functools import cache
 from typing import Any
 
-from app.analytics.gold import GoldVersion, open_gold
+from app.analytics.gold import GoldVersion, load_reader_settings, open_gold
 from app.analytics.query import build_analytics_query, build_coverage_query, select_month_files
 from app.invoices.enums import LINE_ITEM_FIELDS, GroupBy
 from app.invoices.schemas import InvoiceAnalyticsParams
 from app.utils.dates import today_in_business_timezone
+from app.vault import app_secrets
 from lake_config.settings import LakeSettings
 
 FACT_TABLES = ("fact_invoice", "fact_invoice_line")
@@ -18,6 +21,11 @@ MEASURES = {
     "overdue_amount": "overdueAmount",
     "average_days_to_pay": "averageDaysToPay",
 }
+
+
+@cache
+def get_gold_settings() -> LakeSettings | None:
+    return load_reader_settings({**os.environ, **app_secrets()})
 
 
 def select_files(version: GoldVersion, params: InvoiceAnalyticsParams) -> dict[str, list[str]]:

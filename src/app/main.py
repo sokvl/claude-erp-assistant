@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pymongo.errors import PyMongoError
 
+from app.analytics.gold import GoldUnavailable
 from app.routers import audit, auth, charts, chat, invoices, pending_actions, products
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -28,6 +29,12 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/", include_in_schema=False)
 def chat_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "index.html")
+
+
+@app.exception_handler(GoldUnavailable)
+def handle_gold_unavailable(request: Request, exc: GoldUnavailable) -> JSONResponse:
+    logger.exception("analytics unavailable on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=503, content={"detail": "Analytics unavailable"})
 
 
 @app.exception_handler(PyMongoError)

@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.assistant import dispatch
 from app.assistant.dispatch import ToolInputError, run_tool
+from app.charts import service as chart_service
 
 VOCABULARIES = {
     "category": ["GPU", "CPU"],
@@ -51,6 +53,36 @@ class FakeInvoices:
         if criteria and "_id" in criteria:
             return self.by_id.get(criteria["_id"])
         return {"dates": {"postingDate": datetime(2019, 1, 2)}}
+
+
+GOLD = object()
+
+
+class FakeAnalytics:
+    def __init__(self):
+        self.calls = []
+        self.currencies = []
+
+    def __call__(self, gold, params):
+        self.calls.append((gold, params))
+        return {
+            "asOf": params.as_of.isoformat() if params.as_of else "2026-10-21",
+            "dataAsOf": "2026-10-20T13:00:00+00:00",
+            "groupBy": params.group_by,
+            "filters": params.model_dump(mode="json", exclude_none=True, exclude={"as_of", "group_by", "limit"}),
+            "coverage": {"firstPostingDate": "2019-01-02", "lastPostingDate": "2019-01-02"},
+            "currencies": self.currencies,
+        }
+
+
+@pytest.fixture(autouse=True)
+def analytics(monkeypatch):
+    # Arrange: analytics answered by a recording fake, as gold would, never a real bucket
+    fake = FakeAnalytics()
+    monkeypatch.setattr(dispatch, "get_gold_settings", lambda: GOLD)
+    monkeypatch.setattr(dispatch, "analyze_gold", fake)
+    monkeypatch.setattr(chart_service, "analyze_gold", fake)
+    return fake
 
 
 class FakeInserts:
@@ -107,17 +139,16 @@ def test_run_tool_list_invoices_serializes_dates_as_strings(db):
     assert result["items"][0]["dates"]["dueInDate"] == "2020-02-10 00:00:00"
 
 
-def test_run_tool_analyze_invoices_returns_figures_with_as_of_and_coverage(db):
+# Analytics come from gold, never from MongoDB, and the freshness of gold travels to the model.
+def test_run_tool_analyze_invoices_answers_from_gold_with_its_freshness(db, analytics):
     # Arrange / Act
     result = json.loads(run_tool(db, "analyze_invoices", {"group_by": "customer", "as_of": "2020-05-31"}).content)
 
     # Assert
-    assert (result["asOf"], result["groupBy"], result["coverage"], len(db["invoices"].aggregate_calls)) == (
-        "2020-05-31",
-        "customer",
-        {"firstPostingDate": "2019-01-02", "lastPostingDate": "2019-01-02"},
-        1,
-    )
+    [(gold, params)] = analytics.calls
+    assert (gold, params.group_by, params.as_of.isoformat()) == (GOLD, "customer", "2020-05-31")
+    assert (result["asOf"], result["dataAsOf"]) == ("2020-05-31", "2026-10-20T13:00:00+00:00")
+    assert db["invoices"].aggregate_calls == []
 
 
 CHART_ROWS = [
@@ -136,9 +167,9 @@ CHART_ROWS = [
 
 # The model names a query, never the numbers: the chart is drawn from the rows the
 # aggregation returned, and the same rows come back so the answer can quote them.
-def test_run_tool_chart_invoices_stores_a_chart_and_returns_the_rows(db):
+def test_run_tool_chart_invoices_stores_a_chart_and_returns_the_rows(db, analytics):
     # Arrange
-    db["invoices"].currencies = CHART_ROWS
+    analytics.currencies = CHART_ROWS
 
     # Act
     output = run_tool(db, "chart_invoices", {"chart_type": "bar", "group_by": "customer"}, "conv-1", "anna")
@@ -153,7 +184,7 @@ def test_run_tool_chart_invoices_stores_a_chart_and_returns_the_rows(db):
 
 
 def test_run_tool_chart_invoices_no_matching_invoices_returns_no_chart(db):
-    # Arrange: aggregate yields no currencies, so there is nothing to draw
+    # Arrange: gold has no matching currencies, so there is nothing to draw
     # Act
     output = run_tool(db, "chart_invoices", {"chart_type": "bar", "group_by": "customer"}, "conv-1")
 
@@ -263,14 +294,14 @@ def test_run_tool_close_invoice_suggested_date_is_kept_on_the_request_and_logged
     ],
     ids=["unknown_chart_type", "line_over_customers", "units_without_line_grain", "missing_chart_type"],
 )
-def test_run_tool_invalid_chart_input_never_queries_or_stores(db, tool_input, expected_message):
+def test_run_tool_invalid_chart_input_never_queries_or_stores(db, analytics, tool_input, expected_message):
     # Arrange / Act
     with pytest.raises(ToolInputError) as raised:
         run_tool(db, "chart_invoices", tool_input, "conv-1")
 
     # Assert
     assert expected_message in str(raised.value)
-    assert (db["invoices"].aggregate_calls, db["charts"].documents) == ([], [])
+    assert (analytics.calls, db["charts"].documents) == ([], [])
 
 
 def test_run_tool_get_product_facets_returns_sorted_vocabularies(db):
@@ -340,10 +371,10 @@ def test_run_tool_invalid_search_input_never_queries_products(db, tool_input):
     ],
     ids=["list_inverted_amounts", "analyze_zero_limit", "analyze_unparsable_as_of"],
 )
-def test_run_tool_invalid_invoice_input_never_queries_invoices(db, name, tool_input):
+def test_run_tool_invalid_invoice_input_never_queries_invoices(db, analytics, name, tool_input):
     # Arrange / Act
     with pytest.raises(ToolInputError):
         run_tool(db, name, tool_input)
 
     # Assert
-    assert db["invoices"].aggregate_calls == []
+    assert (db["invoices"].find_calls, analytics.calls) == ([], [])
