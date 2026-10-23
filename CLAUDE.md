@@ -18,6 +18,7 @@ PYTHONPATH=src ./venv/bin/python -m app.cli create-user|issue-api-key|revoke-api
 python seed/load_to_mongo.py                  # invoices from seed/dataset.csv + every index set (run first)
 python seed/generate_invoice_items.py [--products-only]   # catalog; without the flag also rewrites invoices.lines
 python seed/fabricate_orders.py [--count --from --to --purge]   # ~1M synthetic invoices, source: "synthetic"
+python seed/simulate_orders.py [--once --every --orders --payments]   # ERP stand-in: new orders + bank-import closes
 python seed/backfill_updated_at.py            # one-time: updatedAt on invoices that predate it
 python seed/backfill_invoice_events.py [--apply]   # one-time: event log for closes made before it; dry run without --apply
 python evals/run.py [--level functional|e2e|all] [--case ID]   # live model eval, costs tokens
