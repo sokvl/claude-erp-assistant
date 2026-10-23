@@ -176,7 +176,7 @@ def derive(invoices: pd.DataFrame) -> pd.DataFrame:
 
 def validate(invoices: pd.DataFrame, lines: pd.DataFrame) -> Validated:
     totals = lines.groupby("invoice_id")["line_total"].sum().round(2)
-    frame = invoices.assign(lines_total=invoices["invoice_id"].map(totals))
+    frame = invoices.assign(lines_total=invoices["invoice_id"].map(totals).astype("float64"))
     hard = evaluate_rules(frame, HARD_RULES)
     rejected = hard.any(axis=1)
     frame["quality_flags"] = collect_names(evaluate_rules(frame, SOFT_RULES))
