@@ -15,7 +15,6 @@ from app.catalog.service import search_catalog
 from app.invoices.schemas import InvoiceAnalyticsParams
 from app.analytics.service import analyze_gold, get_gold_settings
 from app.invoices.service import list_invoices
-from app.limits import MAX_PAGE_SIZE
 from cases import Case, Gold
 
 TABLE = re.compile(r"^\s*\|.*\|\s*\n\s*\|[\s:|-]*-{3,}", re.MULTILINE)
@@ -24,7 +23,7 @@ ROW_TOOLS = (SEARCH_PRODUCTS, LIST_INVOICES, ANALYZE_INVOICES, CHART_INVOICES)
 ANALYTICS_TOOLS = (ANALYZE_INVOICES, CHART_INVOICES)
 CHART_ONLY_FIELDS = ("chart_type", "metric")
 REFUSALS = {"advisor": OUT_OF_SCOPE_REPLY, "analyst": ANALYST_OUT_OF_SCOPE_REPLY}
-
+MAX_PAGE_SIZE = 100
 
 def _analytics(db: Any, params: dict[str, Any]) -> dict[str, Any]:
     # chart_invoices draws the rows analyze_invoices computes, so the same gold query
