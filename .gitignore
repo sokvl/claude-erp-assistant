@@ -9,3 +9,5 @@ deploy/vault/secret_id
 backups/
 deploy/mongo/keyfile
 .dagster/
+scratch/
+docs/
